@@ -14,6 +14,9 @@ class ConfigError(ValueError):
 
 PROVIDERS = ("formulae", "casks", "mas", "npm", "uv_tools", "uv_python")
 MAX_BYTES = 1024 * 1024
+# Explicitly reviewed installer support; not a generic trust/script escape hatch.
+SUPPORTED_FORMULA_TRUST = frozenset(("getsentry/tools/sentry-cli", "resend/cli/resend", "mobile-dev-inc/tap/maestro"))
+SUPPORTED_NPM_LIFECYCLE = {"@posthog/cli": "0.18.3"}
 IDS = {
     "formulae": r"(?:[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/)?[a-z0-9][a-z0-9+.-]*(?:@[0-9]+(?:\.[0-9]+)*)?",
     "casks": r"[a-z0-9][a-z0-9+.-]*(?:@[a-z][a-z0-9.-]*)?",
@@ -125,14 +128,26 @@ def validate_config(value):
             allowed = ["enabled"]
             if provider in ("formulae", "casks"):
                 allowed.append("hold")
+            if provider == "formulae":
+                allowed.append("trust")
             if provider == "casks":
                 allowed.append("accept_external")
             if provider in ("npm", "uv_tools"):
                 allowed.append("version")
+            if provider == "npm":
+                allowed.append("allow_lifecycle_scripts")
             mapping(entry, allowed)
             normalized = {"enabled": boolean(entry.get("enabled", True))}
             if "hold" in entry:
                 normalized["hold"] = boolean(entry["hold"])
+            if "trust" in entry:
+                normalized["trust"] = boolean(entry["trust"])
+                if name not in SUPPORTED_FORMULA_TRUST:
+                    fail("Item trust support is restricted to the explicitly reviewed vendor formulae.")
+            if "allow_lifecycle_scripts" in entry:
+                normalized["allow_lifecycle_scripts"] = boolean(entry["allow_lifecycle_scripts"])
+                if name not in SUPPORTED_NPM_LIFECYCLE or entry.get("version") != SUPPORTED_NPM_LIFECYCLE[name]:
+                    fail("Lifecycle-script support requires the explicitly reviewed package and exact version.")
             if "accept_external" in entry:
                 normalized["accept_external"] = boolean(entry["accept_external"])
                 if normalized["accept_external"] and normalized.get("hold"):

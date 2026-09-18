@@ -26,7 +26,15 @@ log_file=Path(LOG_PATH)
 data=json.loads(state_file.read_text())
 args=sys.argv[1:]
 with log_file.open('a') as out: out.write(json.dumps(args)+'\n')
-if args[:2]==['info','--json=v2']:
+if args==['tap']:
+    print('\n'.join(data.get('taps',[])))
+elif args==['trust','--json=v1']:
+    print(json.dumps({'taps':[],'formulae':data.get('trusted',[]),'casks':[],'commands':[]}))
+elif args[:1]==['tap'] and len(args)==2:
+    data.setdefault('taps',[]).append(args[1]);data['mutations'].append(args);state_file.write_text(json.dumps(data))
+elif args[:2]==['trust','--formula'] and len(args)==3:
+    data.setdefault('trusted',[]).append(args[2]);data['mutations'].append(args);state_file.write_text(json.dumps(data))
+elif args[:2]==['info','--json=v2']:
     name=args[-1]; item=data['packages'][name]
     print(json.dumps({'formulae':[{'name':name,'installed':[{'version':item['version']}] if item['present'] else [],'pinned':item['held'],'versions':{'stable':item['candidate']}}]}))
 elif args[:1]==['fixture-metadata']:
@@ -219,6 +227,52 @@ class NativeExecutionTests(unittest.TestCase):
         result, _ = self.run_role({"git": {}}, "apply", scope["digest"])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()["mutations"], [])
+
+    def stub_privileged_settings(self):
+        # Preserve real role conditions; replace only dangerous OS command/become
+        # boundaries before exercising a hostile full-config prerequisite stage.
+        apply_file = self.engine_root / "roles/mac_setup/tasks/apply.yml"
+        tasks = yaml.safe_load(apply_file.read_text())
+        sentinel = self.root / "forbidden-systemsetup"
+        marker = self.root / "systemsetup-was-called"
+        sentinel.write_text("#!/bin/sh\n/usr/bin/touch " + str(marker) + "\nexit 86\n")
+        sentinel.chmod(0o755)
+        substituted = 0
+        for task in tasks:
+            command = task.get("ansible.builtin.command", {})
+            if command.get("argv", [None])[0] == "/usr/sbin/systemsetup":
+                self.assertTrue(task["become"])
+                task["become"] = False
+                command["argv"][0] = str(sentinel)
+                substituted += 1
+        self.assertEqual(substituted, 2)
+        apply_file.write_text(yaml.safe_dump(tasks, sort_keys=False))
+        return marker
+
+    def test_tap_only_scope_cannot_dispatch_remote_login_or_other_full_config_effects(self):
+        marker = self.stub_privileged_settings()
+        profile = self.home / ".zprofile"
+        profile.write_bytes(b"preserve owner shell\n")
+        selected = {"getsentry/tools/sentry-cli": {"trust": True}}
+        extra = {"mac_setup_config": {"schema_version": 1, "profile": "dev", "packages": {"formulae": selected},
+                                      "settings": {"remote_login": True, "dock": True}}}
+        result, events = self.run_role(selected, extra=extra)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        scope = next(event["result"]["msg"] for event in events if event.get("task") == "QA scope")
+        self.assertFalse(self.state()["mutations"])
+        applied, _ = self.run_role(selected, "apply", scope["digest"], extra)
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.assertEqual(self.state()["mutations"], [["tap", "getsentry/tools"], ["trust", "--formula", "getsentry/tools/sentry-cli"]])
+        self.assertFalse(marker.exists())
+        self.assertEqual(profile.read_bytes(), b"preserve owner shell\n")
+
+    def test_package_ids_matching_setting_names_are_installed_without_privilege(self):
+        marker = self.stub_privileged_settings()
+        self.write_state({"remote-login": False, "public-path": False})
+        result, _ = self.apply({"remote-login": {}, "public-path": {}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual({args[-1] for args in self.state()["mutations"]}, {"remote-login", "public-path"})
+        self.assertFalse(marker.exists())
 
     def test_native_npm_runtime_and_owned_path_block_repeat_without_private_overwrite(self):
         self.write_state({"node@22": True})

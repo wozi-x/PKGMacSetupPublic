@@ -59,7 +59,9 @@ class FakeProviders:
                 installed = ([{"version": item["version"]}] if item["present"] else []) if provider == "formulae" else (item["version"] if item["present"] else None)
                 return json.dumps({provider: [{"name": args[-1], "token": args[-1],
                                                "installed": installed, "pinned": item["held"],
-                                               "versions": {"stable": item["candidate"]}, "version": item["candidate"]}]})
+                                               "versions": {"stable": item["candidate"]}, "version": item["candidate"],
+                                               "outdated": item.get("outdated", item["version"] != item["candidate"]),
+                                               "revision": item.get("revision", 0)}]})
             if args[:1] == ["deps"]:
                 item = self.formulae.get(args[-1], self.casks.get(args[-1]))
                 return "\n".join(item["deps"])
@@ -321,17 +323,21 @@ class EngineTests(unittest.TestCase):
         fake = FakeProviders().formula("openssl@3", present=True)
         fake.dependents["openssl@3"] = ["ansible"]
         config = configuration({"formulae": {"openssl@3": {}}})
-        observed = self.observe(config, fake, "update")
-        self.assertEqual(observed["plan"]["status"], "blocked")
-        with self.assertRaises(engine.EngineError):
-            self.compile(config, fake, observed, "update")
+        with patch.object(engine.sys, "prefix", engine.PREFIX + "/Cellar/ansible/fixture/libexec"):
+            observed = self.observe(config, fake, "update")
+            self.assertEqual(observed["plan"]["status"], "blocked")
+            with self.assertRaises(engine.EngineError):
+                self.compile(config, fake, observed, "update")
 
     def test_controller_and_runtime_dependency_changes_block_before_operations(self):
         for direct, deps in (("ansible", []), ("git", ["ansible"]), ("git", ["python@3.14"])):
             with self.subTest(direct=direct, deps=deps):
                 fake = FakeProviders().formula(direct, present=False, deps=deps)
+                for dependency in deps:
+                    fake.formula(dependency, present=True)
                 config = configuration({"formulae": {direct: {}}})
-                with patch.object(engine.sys, "executable", "/opt/homebrew/Cellar/python@3.14/3.14.7/bin/python3.14"):
+                with patch.object(engine.sys, "executable", engine.PREFIX + "/Cellar/python@3.14/3.14.7/bin/python3.14"), \
+                     patch.object(engine.sys, "prefix", engine.PREFIX + "/Cellar/ansible/fixture/libexec"):
                     observed = self.observe(config, fake)
                     self.assertEqual(observed["plan"]["status"], "blocked")
                     with self.assertRaises(engine.EngineError):

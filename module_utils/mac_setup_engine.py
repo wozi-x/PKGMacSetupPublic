@@ -59,7 +59,7 @@ ENV = {
     "UV_TOOL_DIR": str(PUBLIC / "uv-tools"), "UV_TOOL_BIN_DIR": str(PUBLIC / "bin"),
     "UV_PYTHON_INSTALL_DIR": str(PUBLIC / "python"),
 }
-MUTATIONS = {"install", "change-version", "hold", "ensure-setting"}
+MUTATIONS = {"install", "change-version", "hold", "ensure-setting", "prepare-tap"}
 
 
 class ProductionReader:
@@ -160,6 +160,29 @@ def selected(config, provider):
     return {name: entry for name, entry in config["packages"][provider].items() if entry["enabled"]}
 
 
+def active_runtime_evidence():
+    """Protect formula roots actually hosting this interpreter/controller.
+
+    An unrelated installed Homebrew Ansible is not the active isolated runtime.
+    On SSH targets these paths describe the target's native module interpreter.
+    """
+    paths = {sys.executable, sys.prefix, sys.base_prefix}
+    expanded = set()
+    for path in paths:
+        if not isinstance(path, str) or not path or not Path(path).is_absolute():
+            raise EngineError("Active runtime location cannot be identified safely.")
+        expanded.update((path, str(Path(path).resolve())))
+    protected = set()
+    for path in expanded:
+        for base in (PREFIX + "/Cellar/", PREFIX + "/opt/"):
+            if path.startswith(base):
+                name = path[len(base):].split("/", 1)[0]
+                if not re.fullmatch(planner.IDS["formulae"], name) or "/" in name:
+                    raise EngineError("Active Homebrew runtime formula cannot be identified safely.")
+                protected.add(name)
+    return {"paths": sorted(expanded), "formulae": sorted(protected)}
+
+
 def validate_public_paths(config):
     """Do not follow a pre-existing redirect into another tool/private directory."""
     if not (selected(config, "npm") or selected(config, "uv_tools") or config["runtimes"]["uv_python"]):
@@ -246,6 +269,8 @@ def tap_observations(config, reader, bindings):
                 raise EngineError("Selected tap must have a clean committed source before review.")
             sources[tap] = head
         if missing or not trusted:
+            if not config["packages"]["formulae"][name].get("trust"):
+                raise EngineError("Selected public tap/item trust needs supported formula trust selection and scope review; no formula code loaded.")
             preparation.append({"id": name, "tap": tap, "missing": missing, "trust_missing": not trusted})
     bindings["tap_sources"] = sources
     if preparation:
@@ -434,7 +459,10 @@ def npm_observations(config, reader, state, bindings):
         url = "https://registry.npmjs.org/" + urllib.parse.quote(name, safe="") + "/" + entry.get("version", "latest")
         record = reader.get_json(url)
         candidate = version(record["version"])
+        if entry.get("version") and candidate != entry["version"]:
+            raise EngineError("npm metadata does not match the selected exact version.")
         state["availability"]["npm"][name] = {"available": True, "candidate": candidate, "versions": [candidate]}
+        bindings.setdefault("npm_metadata", {})[name] = digest({"version": candidate, "scripts": record.get("scripts", {}), "dist": record.get("dist", {})})
         if set(record.get("scripts", {})) & {"preinstall", "install", "postinstall"}:
             bindings.setdefault("npm_lifecycle_blocked", []).append(name)
 
@@ -453,9 +481,21 @@ def observe(config, operation="setup", reader=None):
              "capabilities": {}, "bindings": {}, "platform": platform.machine()}
     bindings, details = {}, {}
     try:
+        bindings["active_runtime"] = active_runtime_evidence()
         if operation != "finish":
-            if tap_observations(config, reader, bindings):
-                raise EngineError("Selected public tap/item trust needs separately reviewed prerequisite preparation; no formula code loaded.")
+            pending_taps = tap_observations(config, reader, bindings)
+            if pending_taps:
+                if operation != "setup":
+                    raise EngineError("Missing public tap/item trust must be prepared in a separately reviewed setup scope, not during update.")
+                plan = {"schema_version": 1, "profile": config["profile"], "operation": operation,
+                        "evidence": "provider-observation", "status": "planned", "executable": False,
+                        "actions": [{"provider": "formulae", "id": item["id"], "action": "prepare-tap",
+                                     "reason": "review-public-tap-download-and-selected-formula-trust-before-loading-code"}
+                                    for item in pending_taps],
+                        "warnings": ["Only supported public tap preparation and selected-item trust will run. Formula code and package effects require fresh observation and review afterward."]}
+                result = {"state": state, "plan": plan, "bindings": bindings}
+                result["digest"] = scope_fingerprint(config, operation, result)
+                return result
             brew_observations(config, reader, state, details)
             bindings["brew_sources"] = details
             if selected(config, "npm"):
@@ -498,7 +538,12 @@ def observe(config, operation="setup", reader=None):
                 plan["actions"].append({"provider": "settings", "id": "public-path", "action": "noop" if shell_scope["satisfied"] else "ensure-setting",
                                         "reason": "owned-zprofile-block-exposes-public-tools-and-selected-node-in-new-login-shell"})
         for action in plan["actions"]:
-            if action["provider"] == "npm" and action["id"] in bindings.get("npm_lifecycle_blocked", []) and action["action"] in MUTATIONS:
+            if action["provider"] != "npm" or action["action"] not in MUTATIONS:
+                continue
+            if config["packages"]["npm"][action["id"]].get("allow_lifecycle_scripts"):
+                action["reason"] = "exact-npm-install-allows-package-and-transitive-dependency-lifecycle-scripts-not-sandboxed"
+                plan["warnings"].append("Selected npm lifecycle scripts run as your user and can access user files; an isolated install prefix is not a security sandbox.")
+            elif action["id"] in bindings.get("npm_lifecycle_blocked", []):
                 action.update(action="blocked", reason="npm-install-lifecycle-needs-separate-reviewed-provider-support")
                 plan["status"] = "blocked"
         if operation == "setup" and config["settings"]["dock"]:
@@ -514,20 +559,47 @@ def observe(config, operation="setup", reader=None):
             plan["actions"].append({"provider": "settings", "id": "remote-login",
                                     "action": "ensure-setting", "reason": "explicit-admin-read-then-enable-ssh-os-permission-may-be-required"})
         # Never replace the running interpreter/Ansible or request their dependency upgrades.
-        protected = {"ansible", "ansible-core"}
-        for part in Path(sys.executable).resolve().parts:
-            if part.startswith("python@"):
-                protected.add(part)
+        protected = set(bindings["active_runtime"]["formulae"])
+        protected.update(name for name, entry in selected(config, "formulae").items()
+                         if entry.get("hold") or state["installed"]["formulae"].get(name, {}).get("held"))
+        bindings["protected_formulae"] = sorted(protected)
+        changing = {item["id"] for item in plan["actions"] if item["provider"] == "formulae" and item["action"] in {"install", "change-version"}}
         for action in plan["actions"]:
             if action["provider"] in ("formulae", "casks") and action["action"] in {"install", "change-version"}:
                 flag = "--formula" if action["provider"] == "formulae" else "--cask"
-                dependencies = reader.run([BREW, "deps", "--union", "--include-build", flag, action["id"]]).splitlines()
+                dependencies = [name.strip() for name in reader.run([BREW, "deps", "--union", "--include-build", flag, action["id"]]).splitlines() if name.strip()]
                 affected = set(dependencies)
                 if action["provider"] == "formulae":
                     affected.add(action["id"])
+                conflict = False
                 for dependency in sorted(affected):
-                    affected.update(reader.run([BREW, "uses", "--installed", "--recursive", dependency]).splitlines())
-                if affected & protected:
+                    planner.identifier("formulae", dependency)
+                    impact = {dependency} | {name.strip() for name in reader.run([BREW, "uses", "--installed", "--recursive", dependency]).splitlines() if name.strip()}
+                    if not impact & protected:
+                        continue
+                    if dependency in changing:
+                        conflict = True
+                        break
+                    # A shared dependency already at its installed recipe version
+                    # does not imply mutation of every reverse-dependent runtime.
+                    # Only prove this narrow no-change case; uncertainty blocks.
+                    evidence = parsed_json(reader.run([BREW, "info", "--json=v2", "--formula", dependency])).get("formulae", [])
+                    if len(evidence) != 1:
+                        raise EngineError("Protected runtime dependency evidence is ambiguous.")
+                    item = evidence[0]
+                    revision = item.get("revision", 0)
+                    if type(revision) is not int or revision < 0:
+                        raise EngineError("Protected runtime dependency revision is invalid.")
+                    candidate = version(item["versions"]["stable"]) + ("_" + str(revision) if revision else "")
+                    installed_versions = sorted(version(record["version"]) for record in item.get("installed", []))
+                    unchanged = item.get("outdated") is False and candidate in installed_versions
+                    bindings.setdefault("protected_dependency_checks", {})[dependency] = {
+                        "candidate": candidate, "installed": installed_versions,
+                        "unchanged": unchanged, "protected_dependents": sorted(impact & protected)}
+                    if not unchanged:
+                        conflict = True
+                        break
+                if conflict:
                     action.update(action="blocked", reason="would-replace-active-controller-or-its-runtime")
                     plan["status"] = "blocked"
         result = {"state": state, "plan": plan, "bindings": bindings}
@@ -541,11 +613,21 @@ def compile_operations(config, operation, expected_digest, reader=None):
     observed = observe(config, operation, reader)
     if observed["plan"]["status"] != "planned":
         raise EngineError("Scope is blocked or unresolved; no provider operation can be emitted.")
-    if prerequisite_scope(config, observed) is not None:
+    tap_stage = observed["bindings"].get("tap_preparation")
+    if prerequisite_scope(config, observed) is not None and not tap_stage:
         raise EngineError("Selected runtimes need their own prerequisite scope before tool effects can be reviewed.")
     if not isinstance(expected_digest, str) or observed["digest"] != expected_digest:
         raise EngineError("Target, source, configuration or material package effects changed; review again.")
     operations = []
+    if tap_stage:
+        prepared = set()
+        for item in tap_stage:
+            if item["missing"] and item["tap"] not in prepared:
+                operations.append({"provider": "formulae", "id": item["id"], "argv": [BREW, "tap", item["tap"]], "environment": dict(ENV), "become": False})
+                prepared.add(item["tap"])
+            if item["trust_missing"]:
+                operations.append({"provider": "formulae", "id": item["id"], "argv": [BREW, "trust", "--formula", item["id"]], "environment": dict(ENV), "become": False})
+        return {"operations": operations, "digest": observed["digest"], "plan": observed["plan"], "shell_path": None}
     for action in sorted(observed["plan"]["actions"], key=lambda item: item["action"] != "hold"):
         if action["action"] not in MUTATIONS:
             continue
@@ -557,7 +639,10 @@ def compile_operations(config, operation, expected_digest, reader=None):
             argv = [BREW, verb, "--formula" if provider == "formulae" else "--cask", name]
         elif provider == "npm":
             bound = observed["bindings"]["npm"]
-            argv = [bound["node"], bound["npm"], "install", "--global", "--ignore-scripts", "--prefix", bound["prefix"], name + "@" + wanted]
+            scripts = config["packages"]["npm"][name].get("allow_lifecycle_scripts", False)
+            env["npm_config_ignore_scripts"] = "false" if scripts else "true"
+            env["PATH"] = str(Path(bound["node"]).parent) + ":" + env["PATH"]
+            argv = [bound["node"], bound["npm"], "install", "--global", "--ignore-scripts=false" if scripts else "--ignore-scripts", "--prefix", bound["prefix"], name + "@" + wanted]
         elif provider == "uv_python":
             argv = [PREFIX + "/bin/uv", "--no-config", "python", "install", name]
             env["UV_PYTHON_DOWNLOADS"] = "manual"
@@ -586,6 +671,8 @@ def compile_operations(config, operation, expected_digest, reader=None):
 def prerequisite_scope(config, observed):
     """A small explicit selected-runtime stage, never hidden dependencies or approval."""
     config = validate_config(config)
+    if observed["bindings"].get("tap_preparation"):
+        return config
     # Genuine hard blockers must not be bypassed with partial work.
     if any(item["action"] == "blocked" for item in observed["plan"]["actions"]):
         return None

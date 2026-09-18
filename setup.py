@@ -162,12 +162,12 @@ def main():
         def observe_scope(scope):
             return run_native(scope, args.operation, inventory=args.inventory, mode="observe") if args.inventory else observe(scope, args.operation)
         # A finite prerequisite sequence, not an extensible workflow engine.
-        for stage_number in range(3):
+        for stage_number in range(4):
             observation = observe_scope(config)
             stage = prerequisite_scope(config, observation)
             scope = stage or config
             if stage:
-                print("Selected runtime prerequisites need a separate first scope; tools will be reobserved afterward.")
+                print("Selected tap/runtime prerequisites need a separate scope; packages and tools will be reobserved afterward.")
                 observation = observe_scope(stage)
             print(json.dumps(observation["plan"], indent=2, sort_keys=True))
             if observation["plan"]["status"] != "planned":

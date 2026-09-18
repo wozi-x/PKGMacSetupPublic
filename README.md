@@ -112,10 +112,15 @@ Versions above illustrate syntax, not current security recommendations.
 - npm/uv tools accept quoted exact `version`. Unsupported ranges, alternate
   sources, URL/Git/path IDs and unsupported pin types fail instead of using latest.
   Exact changes, including downgrades, are displayed for review. npm lifecycle
-  installation scripts are disabled; a package declaring install lifecycle hooks
-  is blocked for separate reviewed support rather than claimed usable.
-  Dependency lifecycle hooks are also suppressed; installation does not certify
-  CLI health. Tools relying on those hooks need a separately reviewed provider.
+  installation scripts are disabled by default. The only reviewed exception is
+  `"@posthog/cli": {version: "0.18.3", allow_lifecycle_scripts: true}`.
+  Its reviewed install may run package **and dependency** lifecycle scripts as
+  your user, with access to your files; the isolated prefix is not a security
+  sandbox. Other packages/versions cannot enable scripts. Metadata version,
+  script definitions and distribution integrity metadata are bound to review;
+  transitive dependencies and vendor downloads are not a whole-machine lockfile.
+  Default-off dependency hooks remain suppressed; installation does not certify
+  CLI health. Additional installer exceptions require source review.
 - `runtimes.uv_python` accepts stable exact CPython `3.minor.patch` requests.
   npm binds the selected Node executable and its npm CLI directly. uv tools bind
   one actual selected managed Python. No incidental PATH runtime or force-link.
@@ -133,8 +138,14 @@ Versions above illustrate syntax, not current security recommendations.
   or named channels such as `@beta`, quoted MAS IDs, canonical npm names and
   normalized uv names. A qualified formula requires a clean committed tap with
   its default GitHub HTTPS remote and existing item/tap trust before formula
-  metadata is evaluated; missing preparation stops without downloading or
-  granting trust. The reviewed scope binds tap revision and formula checksum.
+  metadata is evaluated. `trust: true` enables a separately reviewed prerequisite
+  scope only for `getsentry/tools/sentry-cli`, `resend/cli/resend`, and
+  `mobile-dev-inc/tap/maestro`. It downloads a missing canonical public GitHub
+  tap and grants only the selected formula's trust, never whole-tap trust.
+  Other missing/untrusted items stop for separately reviewed support. No formula
+  Ruby is loaded before this stage; after preparation, packages are reobserved
+  and reviewed separately. The scope binds tap revision and formula checksum.
+  Selection flags and a previously completed run are not human consent.
   A core formula's confirmed alias/old name may resolve to its validated current
   core name for public metadata; this does not authorize alternate sources.
   Arbitrary sources and alternate Python implementations remain unsupported.
@@ -154,7 +165,11 @@ requests only selected installed eligible IDs, never bare upgrade-all commands.
 App Store session. Missing Store prerequisites stop, never trigger account setup.
 
 Homebrew can change dependencies; this is not a whole-machine lockfile. Known
-controller conflicts/native holds stop the run. There is no guarantee about
+controller conflicts/native holds stop the run. Protection follows the actual
+raw/resolved interpreter and environment-prefix formula roots, including a
+Homebrew-hosted Ansible environment; an unrelated installed Homebrew Ansible
+does not become the active isolated controller. This evidence is rechecked with
+the package scope, without a general safety opt-out. There is no guarantee about
 unseen private constraints, transitive reproducibility, or transactional rollback.
 Failures stop subsequent operations; already completed changes remain, and a
 rerun observes them before deciding what is still needed.
