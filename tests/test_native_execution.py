@@ -38,6 +38,7 @@ elif args[:2]==['info','--json=v2']:
     name=args[-1]; item=data['packages'][name]
     print(json.dumps({'formulae':[{'name':name,'installed':[{'version':item['version']}] if item['present'] else [],'pinned':item['held'],'versions':{'stable':item['candidate']}}]}))
 elif args[:1]==['fixture-metadata']:
+    if data.get('forbid_metadata'): sys.exit(97)
     if args[1].startswith('https://registry.npmjs.org/'):
         print(json.dumps({'version':'3.6.2'})); sys.exit(0)
     name=args[1].rsplit('/',1)[-1][:-5]; item=data['packages'][name]
@@ -190,6 +191,18 @@ class NativeExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.state()["mutations"]), 1)
         statistics = [e for e in events if e["event"] == "stats"][-1]
         self.assertEqual(statistics["hosts"]["localhost"]["changed"], 0)
+
+    def test_native_present_setup_is_unchanged_without_remote_candidate_reads(self):
+        self.write_state({"git": True})
+        state = self.state()
+        state["forbid_metadata"] = True
+        self.state_path.write_text(json.dumps(state))
+        result, events = self.apply({"git": {}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.state()["mutations"], [])
+        self.assertEqual([event for event in events if event["event"] == "stats"][-1]["hosts"]["localhost"]["changed"], 0)
+        calls = [json.loads(line) for line in self.command_log.read_text().splitlines()]
+        self.assertFalse(any(call[:1] == ["fixture-metadata"] for call in calls))
 
     def test_provider_failure_stops_later_operations_and_rerun_only_retries_remaining(self):
         self.write_state({"git": False, "jq": False, "ripgrep": False}, fail="jq")

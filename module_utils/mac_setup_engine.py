@@ -278,7 +278,7 @@ def tap_observations(config, reader, bindings):
     return preparation
 
 
-def brew_observations(config, reader, state, details):
+def brew_observations(config, reader, state, details, operation="setup"):
     requested = {provider: selected(config, provider) for provider in ("formulae", "casks")}
     # Inspect only selected public IDs, never enumerate private applications/configuration.
     for provider, entries in requested.items():
@@ -331,6 +331,8 @@ def brew_observations(config, reader, state, details):
                     raise EngineError("Selected tap formula source checksum is unavailable.")
                 remote = record  # Approved local tap revision, not a fictitious core API entry.
                 details[name] = {"source_sha256": checksum}
+                if operation == "setup" and present:
+                    continue
             else:
                 canonical = record.get("name", name) if provider == "formulae" else name
                 if provider == "formulae" and canonical != name:
@@ -345,6 +347,11 @@ def brew_observations(config, reader, state, details):
                     planner.identifier("formulae", canonical)
                 if provider == "formulae":
                     details[name] = {"canonical_core_name": canonical}
+                # Presence-only setup does not select a newer recipe. Keep
+                # installed/pin/source identity evidence, without inventing
+                # availability or requiring an unused remote candidate match.
+                if operation == "setup" and present:
+                    continue
                 remote = reader.get_json("https://formulae.brew.sh/api/" + ("formula/" if provider == "formulae" else "cask/") + canonical + ".json")
                 if provider == "formulae" and remote.get("name", canonical) != canonical:
                     raise EngineError("Public core metadata does not match the observed canonical formula.")
@@ -496,7 +503,7 @@ def observe(config, operation="setup", reader=None):
                 result = {"state": state, "plan": plan, "bindings": bindings}
                 result["digest"] = scope_fingerprint(config, operation, result)
                 return result
-            brew_observations(config, reader, state, details)
+            brew_observations(config, reader, state, details, operation=operation)
             bindings["brew_sources"] = details
             if selected(config, "npm"):
                 node_binding(config, reader, state, bindings)

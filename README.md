@@ -161,6 +161,11 @@ Versions above illustrate syntax, not current security recommendations.
 
 Setup does not request updates of satisfied unversioned direct entries. Update
 requests only selected installed eligible IDs, never bare upgrade-all commands.
+For already installed Homebrew entries, setup retains installed-version, pin,
+canonical identity and selected tap/source checks, but does not fetch or compare
+an unused latest package candidate. Missing installs and update observations
+retain strict availability/candidate checks. Runtime executable bindings and
+protected dependency checks for other selected changes still apply.
 `finish` is the separate App Store scope; it may need the owner's existing
 App Store session. Missing Store prerequisites stop, never trigger account setup.
 
