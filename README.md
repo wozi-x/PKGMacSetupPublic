@@ -126,6 +126,8 @@ Versions above illustrate syntax, not current security recommendations.
   its default GitHub HTTPS remote and existing item/tap trust before formula
   metadata is evaluated; missing preparation stops without downloading or
   granting trust. The reviewed scope binds tap revision and formula checksum.
+  A core formula's confirmed alias/old name may resolve to its validated current
+  core name for public metadata; this does not authorize alternate sources.
   Arbitrary sources and alternate Python implementations remain unsupported.
 - Cask `accept_external: true` preserves an existing safe, simple application
   artifact under `/Applications` without adopting, quitting, replacing, updating

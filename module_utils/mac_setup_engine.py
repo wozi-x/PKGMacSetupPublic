@@ -283,7 +283,22 @@ def brew_observations(config, reader, state, details):
                 remote = record  # Approved local tap revision, not a fictitious core API entry.
                 details[name] = {"source_sha256": checksum}
             else:
-                remote = reader.get_json("https://formulae.brew.sh/api/" + ("formula/" if provider == "formulae" else "cask/") + name + ".json")
+                canonical = record.get("name", name) if provider == "formulae" else name
+                if provider == "formulae" and canonical != name:
+                    aliases, oldnames = record.get("aliases", []), record.get("oldnames", [])
+                    if (type(canonical) is not str or "/" in canonical
+                            or record.get("tap") != "homebrew/core"
+                            or record.get("full_name") != canonical
+                            or type(aliases) is not list or type(oldnames) is not list
+                            or any(type(item) is not str for item in aliases + oldnames)
+                            or name not in aliases + oldnames):
+                        raise EngineError("Homebrew core rename lacks matching canonical alias evidence.")
+                    planner.identifier("formulae", canonical)
+                if provider == "formulae":
+                    details[name] = {"canonical_core_name": canonical}
+                remote = reader.get_json("https://formulae.brew.sh/api/" + ("formula/" if provider == "formulae" else "cask/") + canonical + ".json")
+                if provider == "formulae" and remote.get("name", canonical) != canonical:
+                    raise EngineError("Public core metadata does not match the observed canonical formula.")
             candidate = version(remote["versions"]["stable"] if provider == "formulae" else remote["version"])
             local_candidate = version(record["versions"]["stable"] if provider == "formulae" else record["version"])
             if local_candidate != candidate:
@@ -430,7 +445,11 @@ def observe(config, operation="setup", reader=None):
                 if records:
                     state["availability"]["mas"][name]["candidate"] = version(records[0]["version"])
         plan = build_plan(config, operation=operation, state=state)
+        core_names = [item["canonical_core_name"] for item in details.values() if "canonical_core_name" in item]
         for action in plan["actions"]:
+            canonical = details.get(action["id"], {}).get("canonical_core_name")
+            if action["provider"] == "formulae" and canonical and core_names.count(canonical) > 1:
+                action.update(action="blocked", reason="multiple-selected-names-resolve-to-one-core-formula")
             if action["provider"] == "casks" and details.get(action["id"], {}).get("external_app"):
                 action.update(action="preserve", reason="external-app-present-no-adoption-version-claim-or-update")
         kinds = {action["action"] for action in plan["actions"]}
