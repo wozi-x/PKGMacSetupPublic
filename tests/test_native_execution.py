@@ -232,9 +232,12 @@ class NativeExecutionTests(unittest.TestCase):
             "import json,sys\nfrom pathlib import Path\np=Path(" + repr(str(self.state_path)) + ")\nd=json.loads(p.read_text())\na=sys.argv[1:]\n" +
             "if a==['--version']: print('v22.1.0')\n" +
             "elif a[1:2]==['list']: print(json.dumps({'dependencies':{n:{'version':v} for n,v in d['npm'].items()}}))\n" +
-            "elif a[1:2]==['install']:\n n,v=a[-1].rsplit('@',1);d['npm'][n]=v;d['mutations'].append(a);p.write_text(json.dumps(d))\n" +
+            "elif a[1:2]==['install']:\n assert Path(a[a.index('--prefix')+1]).is_dir(), 'reviewed prefix missing before install'\n n,v=a[-1].rsplit('@',1);d['npm'][n]=v;d['mutations'].append(a);p.write_text(json.dumps(d))\n" +
             "else: sys.exit(98)\n")
         node.chmod(0o755)
+        npm_cli = node.parent.parent / "libexec/lib/node_modules/npm/bin/npm-cli.js"
+        npm_cli.parent.mkdir(parents=True)
+        npm_cli.write_text("// inert fixture; fake Node owns all dispatch\n")
         profile = self.home / ".zprofile"
         canary = b"# preserve unrelated private shell bytes\nexport EXISTING_FIXTURE=unchanged\n"
         profile.write_bytes(canary)

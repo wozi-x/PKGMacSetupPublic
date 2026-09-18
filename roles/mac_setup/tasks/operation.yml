@@ -1,4 +1,12 @@
 ---
+- name: Prepare only the reviewed public npm installation prefix
+  ansible.builtin.file:
+    path: '{{ mac_setup_operation_item.directory }}'
+    state: directory
+    mode: '0755'
+  when: mac_setup_operation_item.provider == 'npm'
+  become: false
+
 - name: Apply one reviewed package operation and stop immediately on failure
   ansible.builtin.command:
     argv: '{{ ["/usr/bin/env", "-i"] + (mac_setup_operation_item.environment.items() | map("join", "=") | list) + mac_setup_operation_item.argv }}'

@@ -50,7 +50,7 @@ ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
     "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false",
     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
-    "npm_config_userconfig": "/dev/null", "npm_config_globalconfig": "/dev/null",
+    "npm_config_userconfig": "/dev/null", "npm_config_globalconfig": str(PUBLIC / ".npm-empty-global-config"),
     "npm_config_registry": "https://registry.npmjs.org/", "npm_config_ignore_scripts": "true",
     "npm_config_audit": "false", "npm_config_fund": "false", "npm_config_logs_max": "0",
     "UV_NO_CONFIG": "1", "UV_NO_CACHE": "1", "UV_KEYRING_PROVIDER": "disabled",
@@ -63,6 +63,23 @@ MUTATIONS = {"install", "change-version", "hold", "ensure-setting"}
 
 
 class ProductionReader:
+    def has_directory(self, path):
+        try:
+            metadata = Path(path).lstat()
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise EngineError("Selected public tool prefix is not a regular directory.")
+        return True
+
+    def has_file(self, path, root):
+        candidate = Path(path)
+        if not candidate.exists() and not candidate.is_symlink():
+            return False
+        if not candidate.is_file() or not candidate.resolve().is_relative_to(Path(root).resolve()):
+            raise EngineError("Selected runtime tool path is not a regular file within its formula.")
+        return True
+
     def run(self, argv):
         try:
             result = subprocess.run(argv, env=ENV, cwd="/", stdin=subprocess.DEVNULL,
@@ -161,6 +178,13 @@ def validate_public_paths(config):
                 break
             if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
                 raise EngineError("Public package storage has an unsafe existing directory; it was preserved for review.")
+    if selected(config, "npm"):
+        try:
+            (PUBLIC / ".npm-empty-global-config").lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise EngineError("Reserved empty npm configuration path already exists; preserved without reading it.")
 
 
 def shell_path_scope(config):
@@ -322,7 +346,12 @@ def node_binding(config, reader, state, bindings):
     if prefix != expected:
         raise EngineError("Selected Node runtime has an unexpected prefix.")
     node = prefix + "/bin/node"
-    npm = prefix + "/lib/node_modules/npm/bin/npm-cli.js"
+    candidates = [prefix + suffix for suffix in (
+        "/lib/node_modules/npm/bin/npm-cli.js", "/libexec/lib/node_modules/npm/bin/npm-cli.js")]
+    available = [path for path in candidates if reader.has_file(path, prefix)]
+    if len(available) != 1:
+        raise EngineError("Selected Node formula must contain exactly one supported npm CLI layout; no PATH fallback is allowed.")
+    npm = available[0]
     observed = reader.run([node, "--version"]).strip().removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", observed):
         raise EngineError("Selected Node executable version is invalid.")
@@ -392,8 +421,12 @@ def npm_observations(config, reader, state, bindings):
     if "npm" not in bindings:
         return
     binding = bindings["npm"]
-    result = parsed_json(reader.run([binding["node"], binding["npm"], "list", "--global", "--prefix", binding["prefix"], "--depth=0", "--json"]))
-    dependencies = result.get("dependencies", {})
+    # An absent verified setup-owned prefix is genuinely empty, not a failed
+    # npm command. Never swallow an error from an existing installation.
+    dependencies = {}
+    if reader.has_directory(binding["prefix"]):
+        result = parsed_json(reader.run([binding["node"], binding["npm"], "list", "--global", "--prefix", binding["prefix"], "--depth=0", "--json"]))
+        dependencies = result.get("dependencies", {})
     for name, entry in selected(config, "npm").items():
         state["installed"]["npm"][name] = {"present": name in dependencies}
         if name in dependencies:
@@ -544,6 +577,8 @@ def compile_operations(config, operation, expected_digest, reader=None):
             raise EngineError("No executor exists for a selected provider.")
         operations.append({"provider": provider, "id": name, "argv": argv, "environment": env,
                            "become": provider == "settings" and name == "remote-login"})
+        if provider == "npm":
+            operations[-1]["directory"] = observed["bindings"]["npm"]["prefix"]
     return {"operations": operations, "digest": observed["digest"], "plan": observed["plan"],
             "shell_path": observed["bindings"].get("shell_path")}
 

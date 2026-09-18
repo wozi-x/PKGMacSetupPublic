@@ -41,6 +41,13 @@ class FakeProviders:
                                "held": held, "deps": deps or []}
         return self
 
+    def has_file(self, path, root):
+        # Synthetic layout only; never inspect files on the executing Mac.
+        return path == root + "/lib/node_modules/npm/bin/npm-cli.js"
+
+    def has_directory(self, path):
+        return True  # Explicit synthetic installed-prefix evidence.
+
     def run(self, argv):
         argv = list(argv)
         self.calls.append(argv)
@@ -133,7 +140,8 @@ class EngineTests(unittest.TestCase):
         self.addCleanup(self.scratch.cleanup)
         home = Path(self.scratch.name)
         owned = home / "public"
-        self.boundary = patch.dict(engine.observe.__globals__, {"HOME": home, "PUBLIC": owned})
+        self.boundary = patch.dict(engine.observe.__globals__, {"HOME": home, "PUBLIC": owned,
+            "ENV": {**engine.ENV, "npm_config_globalconfig": str(owned / ".npm-empty-global-config")}})
         self.boundary.start()
         self.addCleanup(self.boundary.stop)
         self.facade_home = patch.object(engine, "HOME", home)

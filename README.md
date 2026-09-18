@@ -119,6 +119,15 @@ Versions above illustrate syntax, not current security recommendations.
 - `runtimes.uv_python` accepts stable exact CPython `3.minor.patch` requests.
   npm binds the selected Node executable and its npm CLI directly. uv tools bind
   one actual selected managed Python. No incidental PATH runtime or force-link.
+  Homebrew npm discovery accepts exactly one regular CLI file in the selected
+  formula's `lib/node_modules` or `libexec/lib/node_modules` layout; missing,
+  ambiguous or redirected-outside-formula layouts stop for review.
+  npm reads `/dev/null` as user config and a distinct reserved, verified-absent
+  public-owned global-config path. Existing files/links there are preserved and
+  rejected without reading them; no ambient npmrc or authentication is loaded.
+  A genuinely absent verified public npm prefix is observed as empty without
+  invoking npm or creating directories. Reviewed installation creates only that
+  compiled prefix; an existing-prefix inspection failure is never treated as empty.
 - Supported IDs are core formula tokens (numeric `@series` allowed), canonical
   `owner/repo/formula` names from already prepared public taps, plain cask tokens
   or named channels such as `@beta`, quoted MAS IDs, canonical npm names and
