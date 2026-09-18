@@ -330,4 +330,4 @@ def build_plan(config, *, operation="setup", state=None):
             "warnings": ["No host, provider, authentication or availability checks were performed.",
                          "These decisions are not approval, an apply manifest or installed readiness.",
                          "Homebrew dependencies/dependents may change; no automatic unpin or transaction rollback.",
-                         "Settings are selections only; this tranche has no settings executor."]}
+                         "Offline settings selections are not target observations or approval."]}
