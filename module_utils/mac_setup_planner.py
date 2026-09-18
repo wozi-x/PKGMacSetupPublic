@@ -15,8 +15,8 @@ class ConfigError(ValueError):
 PROVIDERS = ("formulae", "casks", "mas", "npm", "uv_tools", "uv_python")
 MAX_BYTES = 1024 * 1024
 IDS = {
-    "formulae": r"[a-z0-9][a-z0-9+.-]*(?:@[0-9]+(?:\.[0-9]+)*)?",
-    "casks": r"[a-z0-9][a-z0-9+.-]*",
+    "formulae": r"(?:[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/)?[a-z0-9][a-z0-9+.-]*(?:@[0-9]+(?:\.[0-9]+)*)?",
+    "casks": r"[a-z0-9][a-z0-9+.-]*(?:@[a-z][a-z0-9.-]*)?",
     "mas": r"[1-9][0-9]*",
     "npm": r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*",
     "uv_tools": r"[a-z0-9]+(?:-[a-z0-9]+)*",
@@ -125,12 +125,18 @@ def validate_config(value):
             allowed = ["enabled"]
             if provider in ("formulae", "casks"):
                 allowed.append("hold")
+            if provider == "casks":
+                allowed.append("accept_external")
             if provider in ("npm", "uv_tools"):
                 allowed.append("version")
             mapping(entry, allowed)
             normalized = {"enabled": boolean(entry.get("enabled", True))}
             if "hold" in entry:
                 normalized["hold"] = boolean(entry["hold"])
+            if "accept_external" in entry:
+                normalized["accept_external"] = boolean(entry["accept_external"])
+                if normalized["accept_external"] and normalized.get("hold"):
+                    fail("External-app preservation cannot enforce a Homebrew hold.")
             if "version" in entry:
                 version = plain(entry["version"])
                 pattern = NPM_VERSION if provider == "npm" else UV_VERSION
@@ -295,6 +301,16 @@ def build_plan(config, *, operation="setup", state=None):
             if entry["enabled"]:
                 owners.setdefault(name, []).append(provider)
     collisions = {name for name, providers in owners.items() if len(providers) > 1}
+    aliases = {}
+    for provider in ("formulae", "casks"):
+        for name, entry in selections[provider].items():
+            if entry["enabled"]:
+                basename = name.rsplit("/", 1)[-1]
+                key = (provider, basename.split("@", 1)[0] if provider == "casks" else basename)
+                aliases.setdefault(key, []).append(name)
+    for names in aliases.values():
+        if len(names) > 1:
+            collisions.update(names)
     for provider in PROVIDERS:
         for name, entry in sorted(selections[provider].items()):
             observed = observation(state, "installed", provider, name)

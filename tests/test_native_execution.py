@@ -74,12 +74,14 @@ class NativeExecutionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="public-native-qa-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.script_python = self.root / "fixture-python"
+        self.script_python.symlink_to(sys.executable)
         self.engine_root = self.root / "engine"
         self.engine_root.mkdir()
         self.state_path = self.root / "state.json"
         self.command_log = self.root / "provider.log"
         self.fake_brew = self.root / "fake-brew"
-        self.fake_brew.write_text(FAKE_PROVIDER.replace("PYTHON", sys.executable, 1)
+        self.fake_brew.write_text(FAKE_PROVIDER.replace("PYTHON", str(self.script_python), 1)
                                   .replace("STATE_PATH", repr(str(self.state_path)))
                                   .replace("LOG_PATH", repr(str(self.command_log))))
         self.fake_brew.chmod(0o755)
@@ -99,7 +101,7 @@ class NativeExecutionTests(unittest.TestCase):
             f"module_utils={self.engine_root / 'module_utils'}\n"
             f"roles_path={self.engine_root / 'roles'}\n")
         self.inventory = self.root / "inventory"
-        self.inventory.write_text(f"localhost ansible_connection=local ansible_python_interpreter={sys.executable}\n")
+        self.inventory.write_text(f"localhost ansible_connection=local ansible_python_interpreter={json.dumps(sys.executable)}\n")
         self.write_state({"git": False})
 
     def substitute_provider_boundary(self):
@@ -226,7 +228,7 @@ class NativeExecutionTests(unittest.TestCase):
         self.state_path.write_text(json.dumps(state))
         node = self.root / "prefix/opt/node@22/bin/node"
         node.parent.mkdir(parents=True)
-        node.write_text("#!" + sys.executable + "\n" +
+        node.write_text("#!" + str(self.script_python) + "\n" +
             "import json,sys\nfrom pathlib import Path\np=Path(" + repr(str(self.state_path)) + ")\nd=json.loads(p.read_text())\na=sys.argv[1:]\n" +
             "if a==['--version']: print('v22.1.0')\n" +
             "elif a[1:2]==['list']: print(json.dumps({'dependencies':{n:{'version':v} for n,v in d['npm'].items()}}))\n" +

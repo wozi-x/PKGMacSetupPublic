@@ -37,6 +37,7 @@ PREFIX = str(Path(BREW).parent.parent)
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 PUBLIC = HOME / "Library/Application Support/MacSetup/public"
+APPLICATIONS = Path("/Applications")
 ENV = {
     "HOME": str(HOME), "USER": pwd.getpwuid(os.getuid()).pw_name,
     "LOGNAME": pwd.getpwuid(os.getuid()).pw_name,
@@ -46,6 +47,9 @@ ENV = {
     "HOMEBREW_NO_INSTALL_CLEANUP": "1", "HOMEBREW_NO_INSTALL_UPGRADE": "1",
     "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK": "1",
     "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_COLOR": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false",
+    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
     "npm_config_userconfig": "/dev/null", "npm_config_globalconfig": "/dev/null",
     "npm_config_registry": "https://registry.npmjs.org/", "npm_config_ignore_scripts": "true",
     "npm_config_audit": "false", "npm_config_fund": "false", "npm_config_logs_max": "0",
@@ -188,6 +192,43 @@ def shell_path_scope(config):
             "satisfied": expected in content, "exists": exists, "mode": mode, "uid": os.getuid()}
 
 
+def tap_observations(config, reader, bindings):
+    """Read names/trust/Git identity, never load unapproved formula Ruby."""
+    names = [name for name in selected(config, "formulae") if "/" in name]
+    if not names:
+        return []
+    installed = set(reader.run([BREW, "tap"]).splitlines())
+    trust = parsed_json(reader.run([BREW, "trust", "--json=v1"]))
+    if any(type(trust.get(key)) is not list or any(type(x) is not str for x in trust[key])
+           for key in ("taps", "formulae")):
+        raise EngineError("Selected-item Homebrew trust evidence is unavailable.")
+    preparation, sources = [], {}
+    for name in names:
+        owner, repository, _ = name.split("/")
+        tap = owner + "/" + repository
+        missing = tap not in installed
+        trusted = name in trust["formulae"] or tap in trust["taps"]
+        if not missing:
+            root = PREFIX if PREFIX == "/opt/homebrew" else PREFIX + "/Homebrew"
+            path = root + "/Library/Taps/" + owner + "/homebrew-" + repository
+            git = ["/usr/bin/git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", path]
+            remote = reader.run(git + ["remote", "get-url", "origin"]).strip()
+            expected = "https://github.com/" + owner + "/homebrew-" + repository
+            if remote.removesuffix(".git") != expected:
+                raise EngineError("Selected tap has a noncanonical remote; preserve it for separate review.")
+            head = reader.run(git + ["rev-parse", "HEAD"]).strip()
+            dirty = reader.run(git + ["status", "--porcelain", "--untracked-files=all"]).strip()
+            if not re.fullmatch(r"[a-f0-9]{40}", head) or dirty:
+                raise EngineError("Selected tap must have a clean committed source before review.")
+            sources[tap] = head
+        if missing or not trusted:
+            preparation.append({"id": name, "tap": tap, "missing": missing, "trust_missing": not trusted})
+    bindings["tap_sources"] = sources
+    if preparation:
+        bindings["tap_preparation"] = preparation
+    return preparation
+
+
 def brew_observations(config, reader, state, details):
     requested = {provider: selected(config, provider) for provider in ("formulae", "casks")}
     # Inspect only selected public IDs, never enumerate private applications/configuration.
@@ -199,6 +240,25 @@ def brew_observations(config, reader, state, details):
             if len(records) != 1:
                 raise EngineError("Homebrew did not identify exactly one selected package.")
             record = records[0]
+            if provider == "casks" and entry.get("accept_external") and not record.get("installed"):
+                apps = [artifact["app"] for artifact in record.get("artifacts", []) if type(artifact) is dict and "app" in artifact]
+                if len(apps) != 1 or type(apps[0]) is not list or len(apps[0]) != 1:
+                    raise EngineError("External-app preservation requires one simple cask application artifact.")
+                app = apps[0][0]
+                if type(app) is not str or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .+_-]*\.app", app):
+                    raise EngineError("External application artifact is not a safe application basename.")
+                path = APPLICATIONS / app
+                if path.exists() or path.is_symlink():
+                    item = path.lstat()
+                    parent = path.parent.lstat()
+                    if (stat.S_ISLNK(item.st_mode) or not stat.S_ISDIR(item.st_mode)
+                            or stat.S_ISLNK(parent.st_mode) or item.st_uid not in (0, os.getuid())
+                            or item.st_mode & stat.S_IWOTH):
+                        raise EngineError("Existing external application metadata is unsafe; preserve it for manual review.")
+                    state["installed"][provider][name] = {"present": True, "held": False}
+                    details[name] = {"external_app": {"path": str(path), "inode": item.st_ino, "device": item.st_dev,
+                                                   "uid": item.st_uid, "mode": item.st_mode}}
+                    continue
             installed = record.get("installed", [])
             if provider == "formulae":
                 versions = [version(item["version"]) for item in installed]
@@ -214,14 +274,23 @@ def brew_observations(config, reader, state, details):
             state["installed"][provider][name] = {"present": present, "held": held}
             if current:
                 state["installed"][provider][name]["version"] = current
-            remote = reader.get_json("https://formulae.brew.sh/api/" + ("formula/" if provider == "formulae" else "cask/") + name + ".json")
+            if "/" in name:
+                if record.get("full_name") != name or record.get("tap") != name.rsplit("/", 1)[0]:
+                    raise EngineError("Selected tap formula identity differs from its requested source.")
+                checksum = record.get("ruby_source_checksum", {}).get("sha256", "")
+                if not re.fullmatch(r"[a-f0-9]{64}", checksum):
+                    raise EngineError("Selected tap formula source checksum is unavailable.")
+                remote = record  # Approved local tap revision, not a fictitious core API entry.
+                details[name] = {"source_sha256": checksum}
+            else:
+                remote = reader.get_json("https://formulae.brew.sh/api/" + ("formula/" if provider == "formulae" else "cask/") + name + ".json")
             candidate = version(remote["versions"]["stable"] if provider == "formulae" else remote["version"])
             local_candidate = version(record["versions"]["stable"] if provider == "formulae" else record["version"])
             if local_candidate != candidate:
                 raise EngineError("Homebrew cached metadata differs from the public candidate; refresh metadata separately and review again.")
             available = not remote.get("disabled", False)
             state["availability"][provider][name] = {"available": available, "candidate": candidate}
-            details[name] = {"dependencies": remote.get("dependencies", []), "candidate": candidate}
+            details.setdefault(name, {}).update(dependencies=remote.get("dependencies", []), candidate=candidate)
     if requested["casks"]:
         state["capabilities"]["cask_hold"] = "--cask" in reader.run([BREW, "pin", "--help"])
 
@@ -337,7 +406,10 @@ def observe(config, operation="setup", reader=None):
     bindings, details = {}, {}
     try:
         if operation != "finish":
+            if tap_observations(config, reader, bindings):
+                raise EngineError("Selected public tap/item trust needs separately reviewed prerequisite preparation; no formula code loaded.")
             brew_observations(config, reader, state, details)
+            bindings["brew_sources"] = details
             if selected(config, "npm"):
                 node_binding(config, reader, state, bindings)
                 npm_observations(config, reader, state, bindings)
@@ -358,6 +430,11 @@ def observe(config, operation="setup", reader=None):
                 if records:
                     state["availability"]["mas"][name]["candidate"] = version(records[0]["version"])
         plan = build_plan(config, operation=operation, state=state)
+        for action in plan["actions"]:
+            if action["provider"] == "casks" and details.get(action["id"], {}).get("external_app"):
+                action.update(action="preserve", reason="external-app-present-no-adoption-version-claim-or-update")
+        kinds = {action["action"] for action in plan["actions"]}
+        plan["status"] = "blocked" if "blocked" in kinds else ("unresolved" if "unresolved" in kinds else "planned")
         plan["evidence"] = "provider-observation"
         plan["warnings"] = ["Package scripts/downloads and dependency changes occur only during reviewed apply; no transaction rollback.",
                             "Homebrew may affect dependencies; active controller/runtime dependencies are blocked.",

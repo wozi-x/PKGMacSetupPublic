@@ -119,9 +119,18 @@ Versions above illustrate syntax, not current security recommendations.
 - `runtimes.uv_python` accepts stable exact CPython `3.minor.patch` requests.
   npm binds the selected Node executable and its npm CLI directly. uv tools bind
   one actual selected managed Python. No incidental PATH runtime or force-link.
-- Supported IDs are core untapped formula tokens (numeric `@series` allowed),
-  plain cask tokens, quoted MAS IDs, canonical npm names and normalized uv names.
-  Channels/taps/alternate Python implementations remain explicitly unsupported.
+- Supported IDs are core formula tokens (numeric `@series` allowed), canonical
+  `owner/repo/formula` names from already prepared public taps, plain cask tokens
+  or named channels such as `@beta`, quoted MAS IDs, canonical npm names and
+  normalized uv names. A qualified formula requires a clean committed tap with
+  its default GitHub HTTPS remote and existing item/tap trust before formula
+  metadata is evaluated; missing preparation stops without downloading or
+  granting trust. The reviewed scope binds tap revision and formula checksum.
+  Arbitrary sources and alternate Python implementations remain unsupported.
+- Cask `accept_external: true` preserves an existing safe, simple application
+  artifact under `/Applications` without adopting, quitting, replacing, updating
+  or claiming its version. Its metadata is bound to review. This cannot combine
+  with a Homebrew hold. When the artifact is absent, ordinary installation applies.
 - `dock: true` manages only Dock autohide=true and show-recents=false; it never
   clears icons or restarts applications. `remote_login: true` explicitly reads
   then enables SSH with normal sudo/OS approval. False touches neither setting.
