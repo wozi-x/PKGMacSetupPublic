@@ -228,7 +228,7 @@ class NativeExecutionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()["mutations"], [])
 
-    def stub_privileged_settings(self):
+    def stub_privileged_settings(self, initial_state=None):
         # Preserve real role conditions; replace only dangerous OS command/become
         # boundaries before exercising a hostile full-config prerequisite stage.
         apply_file = self.engine_root / "roles/mac_setup/tasks/apply.yml"
@@ -236,6 +236,18 @@ class NativeExecutionTests(unittest.TestCase):
         sentinel = self.root / "forbidden-systemsetup"
         marker = self.root / "systemsetup-was-called"
         sentinel.write_text("#!/bin/sh\n/usr/bin/touch " + str(marker) + "\nexit 86\n")
+        if initial_state is not None:
+            self.assertIn(initial_state, ("On", "Off"))
+            self.remote_login_state = self.root / "remote-login-state"
+            self.remote_login_state.write_text(initial_state)
+            sentinel.write_text("#!" + str(self.script_python) + "\n" +
+                "import json,sys\nfrom pathlib import Path\n" +
+                "state=Path(" + repr(str(self.remote_login_state)) + ")\n" +
+                "log=Path(" + repr(str(marker)) + ")\na=sys.argv[1:]\n" +
+                "with log.open('a') as out: out.write(json.dumps(a)+'\\n')\n" +
+                "if a==['-getremotelogin']: print('Remote Login: '+state.read_text())\n" +
+                "elif a==['-setremotelogin','on']: state.write_text('On')\n" +
+                "else: sys.exit(99)\n")
         sentinel.chmod(0o755)
         substituted = 0
         for task in tasks:
@@ -248,6 +260,45 @@ class NativeExecutionTests(unittest.TestCase):
         self.assertEqual(substituted, 2)
         apply_file.write_text(yaml.safe_dump(tasks, sort_keys=False))
         return marker
+
+    def test_role_when_entries_are_strings_not_yaml_colon_mappings(self):
+        def check(tasks):
+            for task in tasks:
+                if "when" in task:
+                    conditions = task["when"] if isinstance(task["when"], list) else [task["when"]]
+                    for condition in conditions:
+                        self.assertIsInstance(condition, str, task.get("name", "unnamed task"))
+                for block in ("block", "rescue", "always"):
+                    if block in task:
+                        check(task[block])
+        for path in (ROOT / "roles/mac_setup/tasks").glob("*.yml"):
+            with self.subTest(path=path.name):
+                check(yaml.safe_load(path.read_text()))
+
+    def selected_remote_login_run(self):
+        extra = {"mac_setup_config": {"schema_version": 1, "profile": "dev", "packages": {},
+                                      "settings": {"remote_login": True}}}
+        result, events = self.run_role({}, extra=extra)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        scope = next(event["result"]["msg"] for event in events if event.get("task") == "QA scope")
+        result, events = self.run_role({}, "apply", scope["digest"], extra)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.state()["mutations"], [])
+        return next(event["hosts"]["localhost"]["changed"] for event in events if event["event"] == "stats")
+
+    def test_selected_remote_login_already_on_has_no_changes(self):
+        marker = self.stub_privileged_settings("On")
+        self.assertEqual(self.selected_remote_login_run(), 0)
+        self.assertEqual(self.remote_login_state.read_text(), "On")
+        self.assertEqual([json.loads(line) for line in marker.read_text().splitlines()], [["-getremotelogin"]])
+
+    def test_selected_remote_login_off_enables_once_then_reruns_unchanged(self):
+        marker = self.stub_privileged_settings("Off")
+        self.assertEqual(self.selected_remote_login_run(), 1)
+        self.assertEqual(self.remote_login_state.read_text(), "On")
+        self.assertEqual(self.selected_remote_login_run(), 0)
+        self.assertEqual([json.loads(line) for line in marker.read_text().splitlines()],
+                         [["-getremotelogin"], ["-setremotelogin", "on"], ["-getremotelogin"]])
 
     def test_tap_only_scope_cannot_dispatch_remote_login_or_other_full_config_effects(self):
         marker = self.stub_privileged_settings()

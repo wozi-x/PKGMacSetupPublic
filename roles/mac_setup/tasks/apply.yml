@@ -52,7 +52,7 @@
   become: true
   when:
     - mac_setup_checked.operations | selectattr('provider', 'equalto', 'settings') | selectattr('id', 'equalto', 'remote-login') | list | length > 0
-    - mac_setup_remote_login.stdout | trim != 'Remote Login: On'
+    - "mac_setup_remote_login.stdout | trim != 'Remote Login: On'"
   changed_when: true
 
 - name: Explain Dock activation without restarting user applications
