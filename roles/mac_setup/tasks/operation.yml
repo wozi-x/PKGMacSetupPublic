@@ -1,0 +1,7 @@
+---
+- name: Apply one reviewed package operation and stop immediately on failure
+  ansible.builtin.command:
+    argv: '{{ ["/usr/bin/env", "-i"] + (mac_setup_operation_item.environment.items() | map("join", "=") | list) + mac_setup_operation_item.argv }}'
+    chdir: /
+  become: false
+  changed_when: true

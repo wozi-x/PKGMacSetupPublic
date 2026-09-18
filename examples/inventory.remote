@@ -1,0 +1,4 @@
+# Advanced SSH use: one target only, existing safe non-Apple-shim Python required.
+# Replace these public example placeholders. Never add secrets to inventory.
+[mac]
+example-mac ansible_host=192.0.2.10 ansible_user=example ansible_connection=ssh ansible_python_interpreter=/opt/homebrew/bin/python3

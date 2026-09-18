@@ -1,0 +1,13 @@
+---
+- name: Observe one explicitly selected public setup target
+  hosts: all
+  gather_facts: false
+  become: false
+  vars:
+    mac_setup_mode: observe
+  roles:
+    - role: mac_setup
+  post_tasks:
+    - name: Return a bounded public observation to the reviewing wrapper
+      ansible.builtin.debug:
+        msg: 'MAC_SETUP_SCOPE={{ mac_setup_observation | to_json }}'

@@ -1,71 +1,37 @@
-# AGENTS.md
+# Public Mac Setup maintenance
 
-Guidance for agents working on the public PKGMacSetup bootstrap.
+This repository owns the standalone general macOS setup engine. Keep every
+tracked file public-safe. Use native Ansible tasks and the one strict public YAML
+schema; do not add another planner, arbitrary shell hooks or a dependency solver.
 
-## Purpose
+## Boundaries
 
-This repository is the public, reviewable first stage of the Wozi macOS setup.
-It installs the minimal public prerequisites needed to authenticate GitHub and
-continue into the private `wozi-x/PKGMacSetup` repository.
+- No private repository discovery, authentication, checkout or continuation.
+- No personal skills, agent config, plugins, identities, storage endpoints,
+  signed private artifacts, credentials, private migrations or cleanup.
+- Install apps without replacing global agent configurations. Omitted/disabled
+  packages and false settings mean preserve, never uninstall or disable.
+- No broad package upgrade, unpin, force overwrite, project traversal or venv
+  replacement. Preserve native pins and existing application data.
+- Public tools use only the public-owned destination subtree. Refuse unsafe
+  symlink/ownership redirection instead of repairing or adopting it.
+- `--plan` is offline and non-mutating. Apply requires target observation and
+  actual scoped human review. Configuration and digests are not consent.
+- Keep protected Bash startup, fixed argv and clean provider environments. Do
+  not run real setup or package commands for tests; use synthetic fixtures.
+- Only explicit Remote Login selection may request its privileged setting;
+  never change sudoers, bypass SSH host keys or macOS permission prompts.
 
-## Public safety boundary
+## Ownership and checks
 
-- Keep every tracked file safe for unrestricted public disclosure.
-- Never add credentials, tokens, account identifiers, private inventories,
-  storage addresses, host-specific configuration, signed private artifacts, or
-  content copied from the private repository.
-- Public GitHub repository names and the private repository slug
-  `wozi-x/PKGMacSetup` may be referenced, but do not expose its contents or
-  history.
-- Never accept, read, print, persist, or transport a 1Password service-account
-  token or other automation credential.
-- Keep private SMB, DEVONthink restore, Mac App Store, signing, release, and
-  Wozi service operations outside this repository.
+`module_utils/mac_setup_planner.py` and `mac_setup_engine.py` are authoritative;
+root import facades do not duplicate implementations. Ansible bundles the same
+modules on local/SSH targets. `roles/mac_setup` is the one general executor.
+The private project may explicitly compose this pinned role with private tasks;
+the standalone public entrypoint never loads that private context.
 
-## Installer contract
-
-- `install.sh` must remain safe to rerun as a normal macOS administrator user.
-- Do not require the installer to run as root or tell users to pipe it through
-  `sudo`.
-- Preserve protected Bash startup (`#!/bin/bash -p`) and the early scrubbing of
-  inherited credential and Ansible display variables.
-- Require HTTPS for every download. Download scripts completely, verify they
-  are non-empty, run a syntax check, and only then execute them.
-- Preserve existing applications installed outside Homebrew.
-- Authenticate GitHub locally with GitHub CLI before accessing the private
-  continuation repository.
-- Update an existing private checkout only when its working tree is clean and
-  its `origin` exactly matches `wozi-x/PKGMacSetup`.
-- The automatic continuation may run only the standard private setup. It must
-  not request private storage or trigger account-dependent follow-up stages.
-- Keep `PKGMACSETUP_RUN_SETUP=false` working so users can stop after preparing
-  the private checkout.
-
-## Scope
-
-Keep this repository intentionally small. The expected tracked files are:
-
-- `install.sh` — public first-stage installer and private handoff
-- `README.md` — public usage and safety documentation
-- `LICENSE` — repository license
-- `AGENTS.md` — maintenance rules
-
-Do not turn this repository into a copy of the private Ansible project. New
-machine configuration belongs in private `PKGMacSetup` unless it is both
-essential to the first-stage handoff and safe for public disclosure.
-
-## Editing and verification
-
-- Make focused changes and preserve rerun safety.
-- Review the complete diff for public-disclosure risk before committing.
-- Run:
-
-  ```sh
-  /bin/bash -p -n install.sh
-  git diff --check
-  ```
-
-- When installer behavior changes, also run the bootstrap tests maintained in
-  the private `PKGMacSetup` repository and update its tracked public mirror.
-- Use conventional commit messages. Do not force-push or rewrite published
-  history.
+Run the synthetic unittest suite, native fake-provider fixtures, Bash syntax,
+Ansible syntax and whitespace checks. Inspect the whole export for privacy.
+Never copy private Git history, config, assets, logs or fixtures into this repo.
+Do not run live provisioning, publish, push or rewrite history without explicit
+user authorization. Use conventional commits and preserve unrelated changes.

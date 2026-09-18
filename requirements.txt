@@ -1,0 +1,3 @@
+# Tested controller versions; install only in a separately reviewed isolated environment.
+ansible-core==2.21.3
+PyYAML==6.0.3

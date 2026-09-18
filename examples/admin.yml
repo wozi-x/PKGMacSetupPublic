@@ -1,0 +1,13 @@
+# Neutral example; no personal accounts, private assets or network storage.
+schema_version: 1
+profile: admin
+packages:
+  formulae:
+    git: {}
+  casks:
+    firefox: {}
+    carbon-copy-cloner: {}
+    devonthink: {}
+settings:
+  remote_login: false
+  dock: false

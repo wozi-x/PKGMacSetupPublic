@@ -1,0 +1,7 @@
+---
+- name: Public general setup for the current local user
+  hosts: all
+  gather_facts: false
+  become: false
+  roles:
+    - role: mac_setup

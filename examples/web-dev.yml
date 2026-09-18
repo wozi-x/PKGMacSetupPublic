@@ -1,0 +1,20 @@
+# Versions illustrate supported syntax, not availability/security recommendations.
+schema_version: 1
+profile: dev
+packages:
+  formulae:
+    git: {}
+    node@22: {}
+    uv: {}
+  casks:
+    visual-studio-code: {}
+    firefox: {}
+  npm:
+    prettier: {version: "3.6.2"}
+  uv_tools:
+    ruff: {version: "0.6.0"}
+runtimes:
+  uv_python: ["3.12.3"]
+settings:
+  remote_login: false
+  dock: false

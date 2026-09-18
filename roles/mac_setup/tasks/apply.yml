@@ -1,0 +1,65 @@
+---
+- name: Execute selected package changes with fixed argv and a clean environment
+  ansible.builtin.include_tasks: operation.yml
+  loop: '{{ mac_setup_checked.operations }}'
+  loop_control:
+    loop_var: mac_setup_operation_item
+    label: '{{ mac_setup_operation_item.provider }}:{{ mac_setup_operation_item.id }}'
+  when: mac_setup_operation_item.id not in ['remote-login', 'public-path']
+  # Provider failure stops the play. No uninstall, force, fallback or rollback.
+
+- name: Recheck the shell profile before editing only the owned public PATH block
+  ansible.builtin.stat:
+    path: '{{ mac_setup_checked.shell_path.path }}'
+    follow: false
+    checksum_algorithm: sha256
+  register: mac_setup_shell_stat
+  when: mac_setup_checked.shell_path is not none
+
+- name: Preserve a shell profile changed or redirected since scope review
+  ansible.builtin.assert:
+    that:
+      - not (mac_setup_shell_stat.stat.islnk | default(false))
+      - (mac_setup_shell_stat.stat.exists | default(false)) == mac_setup_checked.shell_path.exists
+      - not (mac_setup_shell_stat.stat.exists | default(false)) or mac_setup_shell_stat.stat.uid == mac_setup_checked.shell_path.uid
+      - not (mac_setup_shell_stat.stat.exists | default(false)) or mac_setup_shell_stat.stat.mode == mac_setup_checked.shell_path.mode
+      - not (mac_setup_shell_stat.stat.exists | default(false)) or mac_setup_shell_stat.stat.checksum == mac_setup_checked.shell_path.checksum
+  when: mac_setup_checked.shell_path is not none
+
+- name: Expose public CLI tools in a narrow owned login-shell block
+  ansible.builtin.blockinfile:
+    path: '{{ mac_setup_checked.shell_path.path }}'
+    marker: '# {mark} MACSETUP PUBLIC TOOLS'
+    block: '{{ mac_setup_checked.shell_path.block }}'
+    create: true
+  when:
+    - mac_setup_checked.shell_path is not none
+    - not mac_setup_checked.shell_path.satisfied
+  become: false
+
+- name: Read Remote Login state only in its explicitly reviewed privileged scope
+  ansible.builtin.command:
+    argv: [/usr/sbin/systemsetup, -getremotelogin]
+  become: true
+  changed_when: false
+  register: mac_setup_remote_login
+  when:
+    - mac_setup_operation | default('setup') == 'setup'
+    - mac_setup_config.settings.remote_login | default(false) | bool
+
+- name: Enable Remote Login without changing sshd configuration or privacy permissions
+  ansible.builtin.command:
+    argv: [/usr/sbin/systemsetup, -setremotelogin, 'on']
+  become: true
+  when:
+    - mac_setup_operation | default('setup') == 'setup'
+    - mac_setup_config.settings.remote_login | default(false) | bool
+    - mac_setup_remote_login.stdout | trim != 'Remote Login: On'
+  changed_when: true
+
+- name: Explain Dock activation without restarting user applications
+  ansible.builtin.debug:
+    msg: Dock preferences are written; they take effect when Dock restarts naturally or after logout.
+  when:
+    - mac_setup_operation | default('setup') == 'setup'
+    - mac_setup_config.settings.dock | default(false) | bool

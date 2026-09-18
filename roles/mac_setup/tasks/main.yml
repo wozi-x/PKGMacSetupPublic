@@ -1,0 +1,41 @@
+---
+- name: Require one explicit non-privileged general target and operation
+  ansible.builtin.assert:
+    that:
+      - mac_setup_compiled is not defined
+      - mac_setup_checked is not defined
+      - mac_setup_observation is not defined
+      - mac_setup_operation_item is not defined
+      - mac_setup_shell_stat is not defined
+      - mac_setup_remote_login is not defined
+      - ansible_play_hosts_all | length == 1
+      - ansible_connection | default('ssh') in ['local', 'ssh', 'smart']
+      - mac_setup_config is mapping
+      - mac_setup_operation | default('setup') in ['setup', 'update', 'finish']
+      - mac_setup_mode | default('apply') in ['observe', 'apply']
+      - mac_setup_mode | default('apply') == 'observe' or mac_setup_review_digest | default('') is match('^[a-f0-9]{64}$')
+      - not (ansible_become | default(false) | bool)
+    fail_msg: Public setup requires one explicit reviewed target; it never discovers private configuration.
+  tags: [always]
+
+- name: Observe the real target or compile only unchanged reviewed effects
+  mac_setup_scope:
+    config: '{{ mac_setup_config }}'
+    operation: '{{ mac_setup_operation | default("setup") }}'
+    mode: '{{ "observe" if mac_setup_mode | default("apply") == "observe" else "compile" }}'
+    review_digest: '{{ mac_setup_review_digest | default("") }}'
+  register: mac_setup_compiled
+  changed_when: false
+  become: false
+  no_log: true
+  tags: [always]
+
+- name: Use ephemeral checked operations in this native play only
+  ansible.builtin.set_fact:
+    mac_setup_checked: '{{ mac_setup_compiled.scope }}'
+    mac_setup_observation: '{{ mac_setup_compiled.scope }}'
+  no_log: true
+
+- name: Execute reviewed package and neutral setting scopes
+  ansible.builtin.include_tasks: apply.yml
+  when: mac_setup_mode | default('apply') == 'apply'

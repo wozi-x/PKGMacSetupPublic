@@ -1,0 +1,15 @@
+# A purpose example, not another machine profile. App Store setup is separate.
+schema_version: 1
+profile: dev
+packages:
+  formulae:
+    git: {}
+    mas: {} # Explicit Store CLI prerequisite installed by standard setup.
+    swiftlint: {}
+  casks:
+    visual-studio-code: {}
+  mas:
+    "497799835": {} # Xcode; availability/login are not checked by offline plans.
+settings:
+  remote_login: false
+  dock: false
