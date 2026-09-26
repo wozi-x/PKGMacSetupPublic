@@ -67,9 +67,17 @@ fragments execute in future shells, never during setup. Only use reviewed
 configuration you trust. Symlink destinations or unsafe destination ancestors
 are rejected without repair.
 
+Base installs Oh My Zsh from its official Git repository into `~/.oh-my-zsh`.
+Existing installations are preserved without updates. Setup never runs the
+upstream installer, starts a shell, or changes your login shell. Check mode
+reports a missing installation without downloading anything.
+
 Without local dotfiles, the small public defaults create only missing
 .zprofile, .zshrc and .tmux.conf files. Existing files and symlinks are skipped;
-there is no Git identity default. Homebrew path, shell plugins and tmux aliases
+there is no Git identity default. New `.zshrc` files load Oh My Zsh with the
+`robbyrussell` theme and `git` plugin, matching Dev/Admin setup. Existing or
+explicitly selected local `.zshrc` files retain control of framework activation.
+Homebrew path, shell plugins and tmux aliases
 are available in newly created shell files. Existing shell customization stays
 with its current owner.
 

@@ -122,6 +122,12 @@ safe_destination() {
     fi
   done
 }
+ohmyzsh_dir="$HOME/.oh-my-zsh"
+safe_destination "$ohmyzsh_dir"
+if [[ -e "$ohmyzsh_dir" ]]; then
+  [[ -d "$ohmyzsh_dir" && -f "$ohmyzsh_dir/oh-my-zsh.sh" && ! -L "$ohmyzsh_dir/oh-my-zsh.sh" ]] \
+    || die 'Existing .oh-my-zsh is incomplete or unsafe; preserved for repair.'
+fi
 if [[ "$keyboard" == true ]]; then
   hotkey_plist="$HOME/Library/Preferences/com.apple.symbolichotkeys.plist"
   safe_destination "$hotkey_plist"
@@ -326,6 +332,24 @@ if [[ "$dock" == true ]]; then
   preference com.apple.dock show-recents bool 0
 fi
 note '[3/4] Shell configuration'
+if [[ ! -d "$ohmyzsh_dir" ]]; then
+  if [[ "$check" == true ]]; then
+    pending 'Oh My Zsh is not installed.'
+  else
+    [[ -n "$scratch" ]] || scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
+    clean_run /usr/bin/git clone --depth 1 --branch master -- \
+      https://github.com/ohmyzsh/ohmyzsh.git "$scratch/oh-my-zsh" \
+      || die 'Oh My Zsh download failed; rerun Base.'
+    [[ -f "$scratch/oh-my-zsh/oh-my-zsh.sh" && ! -L "$scratch/oh-my-zsh/oh-my-zsh.sh" ]] \
+      || die 'Oh My Zsh download is incomplete.'
+    safe_destination "$ohmyzsh_dir"
+    [[ ! -e "$ohmyzsh_dir" ]] || die 'Oh My Zsh destination appeared during setup; preserved.'
+    /bin/mv -n -- "$scratch/oh-my-zsh" "$ohmyzsh_dir"
+    note 'Installed Oh My Zsh. Existing installations are never updated by Base.'
+  fi
+else
+  note 'Preserved existing Oh My Zsh installation.'
+fi
 # Shell fragments are never evaluated here.
 for name in ${dotfiles+"${dotfiles[@]}"}; do
   source_file="$dot_source/$name"

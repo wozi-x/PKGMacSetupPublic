@@ -75,6 +75,15 @@ elif kind == "brew":
         state_file.write_text(json.dumps(state))
     else:
         raise AssertionError(args)
+elif kind == "git":
+    assert args[:6] == ["clone", "--depth", "1", "--branch", "master", "--"]
+    assert args[6] == "https://github.com/ohmyzsh/ohmyzsh.git"
+    assert not os.environ.get("AWS_ACCESS_KEY_ID")
+    if (root / "git-fail").exists():
+        sys.exit(1)
+    destination = pathlib.Path(args[7])
+    destination.mkdir()
+    (destination / "oh-my-zsh.sh").write_text("# fixture; never executed\n")
 elif kind == "mas":
     assert args == ["list"]
     if (root / "mas-list-fail").exists():
@@ -130,11 +139,11 @@ else:
 '''
         )
         self.provider.chmod(0o755)
-        for name in ("brew", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
+        for name in ("brew", "git", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
             (self.bin / name).symlink_to(self.provider)
         self.script = self.root / "setup.sh"
         source = (ROOT / "setup.sh").read_text()
-        for name in ("defaults", "uname", "id", "stat", "curl", "xcode-select"):
+        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
             source = source.replace(f"/usr/bin/{name}", str(self.bin / name))
         source = source.replace("/opt/homebrew/bin/brew", str(self.bin / "brew"))
         source = source.replace("/usr/local/bin/brew", str(self.bin / "brew"))
@@ -168,18 +177,48 @@ else:
         self.assertIn("mas", installed["formulae"])
         self.assertEqual(installed["mas"], {"937984704": "Amphetamine"})
         state = self.state.read_bytes()
-        dots = {p.name: p.read_bytes() for p in self.home.iterdir()}
+        dots = {str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
         before = len(self.calls())
         self.run_base()
         self.assertEqual(self.state.read_bytes(), state)
-        self.assertEqual({p.name: p.read_bytes() for p in self.home.iterdir()}, dots)
+        self.assertEqual({str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}, dots)
         second_calls = self.calls()[before:]
         self.assertFalse(any(c[0] == "defaults" and c[1][0] == "write" for c in second_calls))
         before = len(self.calls())
         self.run_base("--check")
         self.assertFalse(any(c[0] == "brew" and c[1][0] != "list" for c in self.calls()[before:]))
         self.assertEqual(self.state.read_bytes(), state)
-        self.assertEqual({p.name: p.read_bytes() for p in self.home.iterdir()}, dots)
+        self.assertEqual({str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}, dots)
+        self.assertEqual(len([c for c in self.calls() if c[0] == "git"]), 1)
+
+    def test_ohmyzsh_check_and_clone_failure_do_not_create_installation(self):
+        args = self.selection()
+        output = self.run_base(*args, "--check", code=1)
+        self.assertIn("Oh My Zsh is not installed", output)
+        self.assertFalse(any(c[0] == "git" for c in self.calls()))
+        (self.root / "git-fail").touch()
+        self.run_base(*args, code=2)
+        self.assertFalse((self.home / ".oh-my-zsh").exists())
+        self.assertFalse((self.home / ".zshrc").exists())
+
+    def test_existing_ohmyzsh_is_preserved_without_fetch(self):
+        target = self.home / ".oh-my-zsh"
+        target.mkdir()
+        (target / "oh-my-zsh.sh").write_text("# custom existing framework\n")
+        self.run_base(*self.selection())
+        self.assertEqual((target / "oh-my-zsh.sh").read_text(), "# custom existing framework\n")
+        self.assertFalse(any(c[0] == "git" for c in self.calls()))
+
+    def test_unsafe_or_incomplete_ohmyzsh_fails_before_package_mutation(self):
+        target = self.home / ".oh-my-zsh"
+        target.symlink_to(self.root)
+        self.run_base(code=2)
+        self.assertFalse(any(c[0] in ("brew", "git", "defaults") for c in self.calls()))
+        target.unlink()
+        target.mkdir()
+        self.run_base(code=2)
+        self.assertTrue(target.is_dir())
+        self.assertFalse(any(c[0] in ("brew", "git", "defaults") for c in self.calls()))
 
     def test_boolean_writes_use_words_and_numeric_readback(self):
         args = self.selection(prefs="finder=true\nkeyboard=true\ntrackpad=true\ndock=true\n")
@@ -266,7 +305,10 @@ else:
                     "preference_failures": {key: failure},
                 }))
                 for path in self.home.iterdir():
-                    path.unlink()
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
                 output = self.run_base(code=3)
                 self.assertIn(f"{key}: {reason}", output)
                 self.assertIn("[3/4] Shell configuration", output)
