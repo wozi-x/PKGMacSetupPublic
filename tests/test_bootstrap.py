@@ -121,7 +121,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(sum(line.startswith("uv") for line in self.records()), first_count)
 
     def test_offline_wrapper_no_runtime_never_invokes_bootstrap_or_provider(self):
-        wrapper = (ROOT / "setup.sh").read_text()
+        wrapper = (ROOT / "legacy-setup.sh").read_text()
         self.assertTrue(wrapper.startswith("#!/bin/bash -p\n"))
         for old in ("/opt/homebrew/opt/ansible/libexec/bin/python", "/usr/local/opt/ansible/libexec/bin/python"):
             wrapper = wrapper.replace(old, str(self.root / "missing-controller"))
@@ -140,7 +140,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertFalse((self.home / "Library").exists())
 
     def test_public_bootstrap_contains_no_private_handoff_or_auth(self):
-        sources = "\n".join((ROOT / file).read_text() for file in ("bootstrap.sh", "setup.sh", "install.sh"))
+        sources = "\n".join((ROOT / file).read_text() for file in ("bootstrap.sh", "legacy-setup.sh", "install.sh"))
         for forbidden in ("gh auth", "gh repo", "op read", "security find", "agent/plugins"):
             self.assertNotIn(forbidden, sources)
         self.assertIn("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh", sources)

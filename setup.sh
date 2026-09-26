@@ -1,58 +1,334 @@
 #!/bin/bash -p
-# No shell startup, credential-helper probe or private discovery.
-set -eu
-unset BASH_ENV ENV CDPATH PYTHONPATH PYTHONHOME ANSIBLE_CONFIG ANSIBLE_CALLBACKS_ENABLED ANSIBLE_STDOUT_CALLBACK
+# Standalone Base. No private discovery, authentication or sourced configuration.
+set -Eeuo pipefail
+unset BASH_ENV ENV CDPATH RUBYOPT RUBYLIB PYTHONPATH PYTHONHOME
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-script_dir="$(cd -- "$(dirname -- "$0")" && pwd -P)"
-mode=''
-noninteractive=false
-inventory_selected=false
-config_file=''
-arguments=("$@")
+base_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+check=false
+config_dir=''
+scratch=''
+drift=0
+finder=false keyboard=false trackpad=false dock=false
+formulae=() casks=() mas_ids=() dotfiles=() declarations=()
+die() { printf 'Error: %s\n' "$*" >&2; exit 2; }
+note() { printf '%s\n' "$*"; }
+pending() { note "Pending: $*"; drift=1; }
+clean_run() {
+  /usr/bin/env -i HOME="$HOME" USER="$base_user" LOGNAME="$base_user" PATH="$PATH" \
+    SHELL=/bin/zsh TERM="${TERM-dumb}" \
+    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 \
+    HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALL_UPGRADE=1 \
+    HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
+    HOMEBREW_BUNDLE_NO_UPGRADE=1 "$@"
+}
+cleanup() {
+  if [[ -n "$scratch" && "$scratch" == /private/tmp/macsetup-base.* ]]; then
+    /bin/rm -rf -- "$scratch"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --plan|--apply|--prepare)
-      [[ -z "$mode" ]] || { printf '%s\n' 'Choose one mode.' >&2; exit 2; }
-      mode="$1"; shift ;;
-    --config|--operation|-i|--inventory)
-      [[ $# -gt 1 ]] || { printf '%s\n' 'Missing option value.' >&2; exit 2; }
-      if [[ "$1" == --config ]]; then
-        [[ -z "$config_file" && -f "$2" && ! -L "$2" ]] || { printf '%s\n' 'Select one regular YAML configuration.' >&2; exit 2; }
-        config_file="$2"
-      fi
-      if [[ "$1" == --operation ]]; then
-        case "$2" in setup|update|finish) ;; *) printf '%s\n' 'Unsupported operation.' >&2; exit 2 ;; esac
-      fi
-      if [[ "$1" == -i || "$1" == --inventory ]]; then
-        [[ -f "$2" && ! -L "$2" && ! -x "$2" ]] || { printf '%s\n' 'Select one regular static inventory.' >&2; exit 2; }
-      fi
-      [[ "$1" != -i && "$1" != --inventory ]] || inventory_selected=true
-      shift 2 ;;
-    --non-interactive) noninteractive=true; shift ;;
-    -h|--help) printf '%s\n' 'Use --config FILE --plan|--apply [--operation setup|update|finish] [-i INVENTORY], or --prepare.'; exit 0 ;;
-    *) printf '%s\n' 'Unsupported option; use --help.' >&2; exit 2 ;;
+    --check) check=true; shift ;;
+    --config-dir)
+      [[ $# -ge 2 && -z "$config_dir" ]] || die 'Use --config-dir once, with a directory.'
+      config_dir="$2"; shift 2 ;;
+    -h|--help)
+      note 'Usage: ./install.sh [--config-dir LOCAL_DIR] [--check]'
+      note 'Apply the selected Base setup, or report drift without changing it.'
+      exit 0 ;;
+    *) die "Unknown option: $1" ;;
   esac
 done
-[[ -n "$mode" ]] || { printf '%s\n' 'Choose --plan, --apply or --prepare.' >&2; exit 2; }
-if [[ "$mode" != --plan && "$noninteractive" == true ]]; then
-  printf '%s\n' 'Needs human: apply/prepare requires an interactive reviewed scope.' >&2
-  exit 2
+[[ "$(/usr/bin/uname -s)" == Darwin ]] || die 'Base requires macOS.'
+base_uid="$(/usr/bin/id -u)"
+base_user="$(/usr/bin/id -un)"
+[[ "$base_uid" != 0 ]] || die 'Run as your ordinary user, without sudo.'
+[[ "$HOME" == /* && ! "$HOME" =~ [[:cntrl:]] && -d "$HOME" && ! -L "$HOME" ]] || die 'HOME must be a regular absolute directory.'
+[[ "$(/usr/bin/stat -f %u "$HOME")" == "$base_uid" ]] || die 'HOME must belong to the current user.'
+brewfile="$base_dir/Brewfile"
+preferences="$base_dir/preferences.conf"
+dot_source="$base_dir/dotfiles"
+local_dots=false
+if [[ -n "$config_dir" ]]; then
+  [[ ! "$config_dir" =~ [[:cntrl:]] && -d "$config_dir" && ! -L "$config_dir" ]] || die 'Select a regular local directory without control characters.'
+  config_dir="$(cd -- "$config_dir" && pwd -P)"
+  [[ ! -e "$config_dir/Brewfile" && ! -L "$config_dir/Brewfile" ]] || brewfile="$config_dir/Brewfile"
+  [[ ! -e "$config_dir/preferences.conf" && ! -L "$config_dir/preferences.conf" ]] || preferences="$config_dir/preferences.conf"
+  if [[ -e "$config_dir/dotfiles" || -L "$config_dir/dotfiles" ]]; then
+    dot_source="$config_dir/dotfiles"
+    local_dots=true
+  fi
 fi
-if [[ "$mode" == --prepare ]]; then
-  [[ ${#arguments[@]} == 1 ]] || { printf '%s\n' '--prepare is a separate prerequisite operation.' >&2; exit 2; }
-  exec /bin/bash -p "$script_dir/bootstrap.sh"
-fi
-[[ -n "$config_file" ]] || { printf '%s\n' '--config is required before any package or prerequisite work.' >&2; exit 2; }
-controller=''
-for candidate in "$HOME/Library/Application Support/MacSetup/controller/bin/python" /opt/homebrew/opt/ansible/libexec/bin/python /usr/local/opt/ansible/libexec/bin/python; do
-  if [[ -x "$candidate" ]]; then controller="$candidate"; break; fi
+for source_file in "$brewfile" "$preferences"; do
+  [[ -f "$source_file" && ! -L "$source_file" ]] || die "Configuration must be a regular file: $source_file"
 done
-if [[ "$mode" == --apply && ( -z "$controller" || ( "$inventory_selected" == false && ! -x /opt/homebrew/bin/brew && ! -x /usr/local/bin/brew ) ) ]]; then
-  /bin/bash -p "$script_dir/bootstrap.sh"
-  controller="$HOME/Library/Application Support/MacSetup/controller/bin/python"
+# Data-only Brewfile declarations: no arbitrary Ruby or package hooks.
+package_pattern='^[[:space:]]*(brew|cask)[[:space:]]+"([a-z0-9][a-z0-9+_.@-]*)"[[:space:]]*(#.*)?$'
+mas_pattern='^[[:space:]]*mas[[:space:]]+"([A-Za-z0-9 ._()+-]+)",[[:space:]]*id:[[:space:]]*([0-9]+)[[:space:]]*(#.*)?$'
+line_number=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line_number=$((line_number + 1))
+  [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  if [[ "$line" =~ $package_pattern ]]; then
+    declarations+=("${BASH_REMATCH[1]} \"${BASH_REMATCH[2]}\"")
+    if [[ "${BASH_REMATCH[1]}" == brew ]]; then
+      formulae+=("${BASH_REMATCH[2]}")
+    else
+      casks+=("${BASH_REMATCH[2]}")
+    fi
+  elif [[ "$line" =~ $mas_pattern ]]; then
+    mas_ids+=("${BASH_REMATCH[2]}")
+    declarations+=("mas \"${BASH_REMATCH[1]}\", id: ${BASH_REMATCH[2]}")
+  else
+    die "Unsupported Brewfile declaration on line $line_number; use plain brew, cask or mas entries."
+  fi
+done < "$brewfile"
+seen_preferences=' '
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  [[ "$line" =~ ^(finder|keyboard|trackpad|dock)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock=true|false.'
+  key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+  [[ "$seen_preferences" != *" $key "* ]] || die "Duplicate preference group: $key"
+  seen_preferences+="$key "
+  printf -v "$key" '%s' "$value"
+done < "$preferences"
+# Validate destinations before package or preference mutation.
+safe_destination() {
+  local destination="$1" current="$HOME" component permissions
+  [[ "$destination" == "$HOME/"* && ! "$destination" =~ [[:cntrl:]] ]] || die 'Invalid destination.'
+  local relative="${destination#"$HOME/"}"
+  local parts=()
+  IFS=/ read -r -a parts <<< "$relative"
+  for component in "${parts[@]}"; do
+    [[ "$component" != . && "$component" != .. && -n "$component" ]] || die 'Invalid destination component.'
+    current="$current/$component"
+    [[ ! -L "$current" ]] || die "Destination is a symlink; preserved: $current"
+    if [[ -e "$current" ]]; then
+      [[ "$(/usr/bin/stat -f %u "$current")" == "$base_uid" ]] || die "Destination belongs to another user: $current"
+      permissions="$(/usr/bin/stat -f %Lp "$current")"
+      (( (8#$permissions & 022) == 0 )) || die "Destination is writable by another user: $current"
+      if [[ "$current" != "$destination" ]]; then
+        [[ -d "$current" ]] || die "Destination ancestor is not a directory: $current"
+      fi
+    fi
+  done
+}
+[[ -d "$dot_source" && ! -L "$dot_source" ]] || die 'dotfiles must be a regular directory.'
+shopt -s nullglob dotglob
+for source_file in "$dot_source"/*; do
+  name="${source_file##*/}"
+  case "$name" in .zprofile|.zshrc|.tmux.conf|.gitconfig) ;; *) die "Unsupported dotfile: $name" ;; esac
+  [[ -f "$source_file" && ! -L "$source_file" ]] || die "Dotfile must be a regular file: $name"
+  dotfiles+=("$name")
+  if [[ "$local_dots" == true ]]; then
+    safe_destination "$HOME/.config/macsetup/base/${name#.}"
+    safe_destination "$HOME/$name"
+    [[ ! -e "$HOME/$name" || -f "$HOME/$name" ]] || die "Home dotfile is not a regular file: $name"
+    [[ ! -e "$HOME/.config/macsetup/base/${name#.}" || -f "$HOME/.config/macsetup/base/${name#.}" ]] || die "Managed fragment is not a regular file: $name"
+  elif [[ ! -e "$HOME/$name" && ! -L "$HOME/$name" ]]; then
+    safe_destination "$HOME/$name"
+  fi
+done
+shopt -u nullglob dotglob
+note 'Base workstation setup'
+note "Packages: $brewfile"
+note "Preferences: $preferences"
+note 'Homebrew may change dependencies while installing missing packages; no broad upgrade or cleanup is requested.'
+note '[1/3] Packages'
+brew_bin=/opt/homebrew/bin/brew
+[[ "$(/usr/bin/uname -m)" == arm64 ]] || brew_bin=/usr/local/bin/brew
+if [[ ! -x "$brew_bin" ]]; then
+  if [[ "$check" == true ]]; then
+    pending 'Homebrew is not installed.'
+  else
+    if ! /usr/bin/xcode-select -p >/dev/null 2>&1; then
+      /usr/bin/xcode-select --install
+      die 'Complete Apple Command Line Tools installation, then rerun Base.'
+    fi
+    scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
+    clean_run /usr/bin/curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+      --output "$scratch/homebrew.sh" https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+    [[ -s "$scratch/homebrew.sh" ]] || die 'Homebrew installer download was empty.'
+    /bin/bash -p -n "$scratch/homebrew.sh"
+    note 'Installing Homebrew using its official HTTPS installer; it may request administrator approval.'
+    clean_run /bin/bash -p "$scratch/homebrew.sh"
+    [[ -x "$brew_bin" ]] || die 'Homebrew remains unavailable.'
+  fi
 fi
-if [[ -z "$controller" ]]; then
-  printf '%s\n' 'Unresolved prerequisites: no existing Ansible/PyYAML controller. --plan made no changes; use --prepare for a separately reviewed prerequisite scope.' >&2
-  exit 3
+# Known baseline app paths work offline, including externally installed copies.
+external_app() {
+  local name="$1" app='' metadata='' index=0 artifact='' found=false
+  case "$name" in raycast) app=Raycast.app ;; zed) app=Zed.app ;; esac
+  if [[ -n "$app" ]]; then
+    [[ -d "/Applications/$app" && ! -L "/Applications/$app" ]] \
+      || [[ -d "$HOME/Applications/$app" && ! -L "$HOME/Applications/$app" ]]
+    return
+  fi
+  # Public JSON only, no cask Ruby evaluation or persistent metadata cache.
+  metadata="$(clean_run /usr/bin/curl -q --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
+    "https://formulae.brew.sh/api/cask/$name.json")" || die "Cannot inspect external application artifacts for $name."
+  printf '%s' "$metadata" | /usr/bin/plutil -extract artifacts json -o /dev/null - 2>/dev/null \
+    || die "Invalid public cask metadata for $name."
+  while artifact="$(printf '%s' "$metadata" | /usr/bin/plutil -extract "artifacts.$index" json -o - - 2>/dev/null)"; do
+    app="$(printf '%s' "$artifact" | /usr/bin/plutil -extract app.0 raw -o - - 2>/dev/null || true)"
+    if [[ -n "$app" ]]; then
+      [[ "$app" != */* && "$app" != *\\* && ! "$app" =~ [[:cntrl:]] && "$app" == *.app ]] || return 1
+      [[ -d "/Applications/$app" && ! -L "/Applications/$app" ]] \
+        || [[ -d "$HOME/Applications/$app" && ! -L "$HOME/Applications/$app" ]] || return 1
+      found=true
+    fi
+    index=$((index + 1))
+  done
+  [[ "$found" == true ]]
+}
+skip_casks=''
+if [[ -x "$brew_bin" ]]; then
+  installed_formulae="$(clean_run "$brew_bin" list --formula -1)"
+  installed_casks="$(clean_run "$brew_bin" list --cask -1)"
+  for package in ${formulae+"${formulae[@]}"}; do
+    /usr/bin/grep -Fxq -- "$package" <<< "$installed_formulae" || pending "Formula: $package"
+  done
+  for package in ${casks+"${casks[@]}"}; do
+    if /usr/bin/grep -Fxq -- "$package" <<< "$installed_casks"; then
+      continue
+    elif external_app "$package"; then
+      note "Preserved external app: $package"
+      skip_casks+=" $package"
+    else
+      pending "Cask: $package"
+    fi
+  done
+  if [[ ${#mas_ids[@]} -gt 0 ]]; then
+    mas_bin="$(dirname "$brew_bin")/mas"
+    if [[ -x "$mas_bin" ]]; then
+      installed_mas="$(clean_run "$mas_bin" list)"
+      for package in ${mas_ids+"${mas_ids[@]}"}; do
+        /usr/bin/grep -Eq "^${package}[[:space:]]" <<< "$installed_mas" || pending "App Store app: $package"
+      done
+    else
+      pending 'App Store CLI (mas); include brew "mas" in the selected Brewfile.'
+      [[ "$check" == true ]] || /usr/bin/grep -Fxq mas <(printf '%s\n' ${formulae+"${formulae[@]}"}) || die 'App Store entries require brew "mas" in the selected Brewfile.'
+    fi
+  fi
+  if [[ "$check" == false ]]; then
+    [[ -n "$scratch" ]] || scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
+    # Emit only validated declarations; never execute the original Ruby file.
+    printf '%s\n' ${declarations+"${declarations[@]}"} > "$scratch/Brewfile"
+    (
+      cd -- "$scratch"
+      clean_run /usr/bin/env HOMEBREW_BUNDLE_CASK_SKIP="$skip_casks" \
+        "$brew_bin" bundle install --file="$scratch/Brewfile" --no-upgrade
+    ) || die 'Package installation stopped. Existing app conflicts are preserved; do not force adoption. For App Store entries, sign into the App Store, then rerun.'
+  fi
 fi
-exec /usr/bin/env -i PATH="$PATH" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" "$controller" -I -B "$script_dir/setup.py" "${arguments[@]}"
+note '[2/3] macOS preferences'
+preference() {
+  local domain="$1" key="$2" kind="$3" desired="$4" current=''
+  current="$(/usr/bin/defaults read "$domain" "$key" 2>/dev/null || true)"
+  if [[ "$current" != "$desired" ]]; then
+    if [[ "$check" == true ]]; then
+      pending "Preference: $domain $key -> $desired"
+    else
+      note "Set preference: $domain $key -> $desired"
+      /usr/bin/defaults write "$domain" "$key" "-$kind" "$desired"
+      [[ "$(/usr/bin/defaults read "$domain" "$key")" == "$desired" ]] || die "Preference did not persist: $domain $key"
+    fi
+  fi
+}
+if [[ "$finder" == true ]]; then
+  preference NSGlobalDomain AppleShowAllExtensions bool 1
+  preference com.apple.finder ShowPathbar bool 1
+  preference com.apple.finder ShowStatusBar bool 1
+  preference com.apple.finder FXPreferredViewStyle string clmv
+  preference com.apple.finder FXDefaultSearchScope string SCcf
+fi
+if [[ "$keyboard" == true ]]; then
+  preference NSGlobalDomain KeyRepeat int 2
+  preference NSGlobalDomain InitialKeyRepeat int 15
+  preference NSGlobalDomain ApplePressAndHoldEnabled bool 0
+  preference NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled bool 0
+  preference NSGlobalDomain NSAutomaticDashSubstitutionEnabled bool 0
+  preference NSGlobalDomain NSAutomaticSpellingCorrectionEnabled bool 0
+fi
+if [[ "$trackpad" == true ]]; then
+  for domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
+    preference "$domain" Clicking int 1
+    preference "$domain" TrackpadRightClick bool 1
+    preference "$domain" TrackpadThreeFingerDrag bool 1
+  done
+  preference com.apple.AppleMultitouchTrackpad FirstClickThreshold int 0
+fi
+if [[ "$dock" == true ]]; then
+  preference com.apple.dock autohide bool 1
+  preference com.apple.dock tilesize int 48
+  preference com.apple.dock show-recents bool 0
+fi
+note '[3/3] Shell configuration'
+# Shell fragments are never evaluated here.
+for name in ${dotfiles+"${dotfiles[@]}"}; do
+  source_file="$dot_source/$name"
+  destination="$HOME/$name"
+  if [[ "$local_dots" == true ]]; then
+    fragment="$HOME/.config/macsetup/base/${name#.}"
+    case "$name" in
+      .zprofile) include='source "$HOME/.config/macsetup/base/zprofile"' ;;
+      .zshrc) include='source "$HOME/.config/macsetup/base/zshrc"' ;;
+      .tmux.conf|.gitconfig)
+        escaped_fragment="${fragment//\\/\\\\}"
+        escaped_fragment="${escaped_fragment//\"/\\\"}"
+        if [[ "$name" == .tmux.conf ]]; then
+          escaped_fragment="${escaped_fragment//\$/\\$}"
+          include="source-file \"$escaped_fragment\""
+        else
+          include="$(printf '[include]\n\tpath = \"%s\"' "$escaped_fragment")"
+        fi ;;
+    esac
+    included=false
+    if [[ -f "$destination" ]]; then
+      if [[ "$name" == .gitconfig ]]; then
+        # Compare the literal adjacent two-line block, with no awk string escapes.
+        previous=''
+        while IFS= read -r dot_line || [[ -n "$dot_line" ]]; do
+          if [[ "$previous"$'\n'"$dot_line" == "$include" ]]; then included=true; break; fi
+          previous="$dot_line"
+        done < "$destination"
+      else
+        /usr/bin/grep -Fxq -- "$include" "$destination" && included=true
+      fi
+    fi
+    if ! /usr/bin/cmp -s -- "$source_file" "$fragment"; then
+      if [[ "$check" == true ]]; then pending "Managed dotfile: $name"
+      else
+        /bin/mkdir -p -- "$HOME/.config/macsetup/base"
+        /bin/cp -- "$source_file" "$fragment"
+        /bin/chmod 600 "$fragment"
+        note "Updated managed dotfile: $name"
+      fi
+    fi
+    if [[ "$included" == false ]]; then
+      if [[ "$check" == true ]]; then pending "Dotfile include: $name"
+      else
+        printf '\n%s\n' "$include" >> "$destination"
+        note "Added dotfile include: $name"
+      fi
+    fi
+  elif [[ -e "$destination" || -L "$destination" ]]; then
+    note "Preserved existing dotfile: $name"
+  elif [[ "$check" == true ]]; then
+    pending "Default dotfile: $name"
+  else
+    /bin/cp -n -- "$source_file" "$destination"
+    note "Created default dotfile: $name"
+  fi
+done
+if [[ "$check" == true ]]; then
+  [[ "$drift" == 0 ]] || { note 'Base has pending changes.'; exit 1; }
+  note '[OK] Base is ready for the selected configuration.'
+else
+  note '[OK] Base setup completed. Open a new shell; preferences may require an app restart or logout.'
+  note 'Raycast permissions, application sign-in and App Store authentication remain interactive.'
+fi

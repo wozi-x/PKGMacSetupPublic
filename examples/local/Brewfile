@@ -1,0 +1,11 @@
+# Complete replacement for the public list; add client tools here as needed.
+brew "git"
+brew "gh"
+brew "jq"
+brew "tmux"
+brew "zsh-autosuggestions"
+brew "zsh-syntax-highlighting"
+cask "raycast"
+cask "zed"
+# App Store example, only after signing into the App Store:
+# mas "Numbers", id: 361304891
