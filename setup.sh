@@ -24,6 +24,23 @@ clean_run() {
     HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 \
     HOMEBREW_BUNDLE_NO_UPGRADE=1 "$@"
 }
+account_ready() {
+  local app="$1" answer=''
+  [[ -t 0 ]] || return 0
+  note "Open $app and complete sign-in or unlock it. Already ready? Continue below."
+  clean_run /usr/bin/open -a "$app" || note "Open $app manually to continue."
+  while true; do
+    if ! read -r -p "Press Return when ready, s to skip, or q to quit: " answer; then
+      exit 130
+    fi
+    case "$answer" in
+      '') return 0 ;;
+      s|S) return 1 ;;
+      q|Q) exit 130 ;;
+      *) note 'Use Return, s, or q. Sign in inside the app.' ;;
+    esac
+  done
+}
 cleanup() {
   if [[ -n "$scratch" && "$scratch" == /private/tmp/macsetup-base.* ]]; then
     /bin/rm -rf -- "$scratch"
@@ -183,7 +200,7 @@ fi
 # Known baseline app paths work offline, including externally installed copies.
 external_app() {
   local name="$1" app='' metadata='' index=0 artifact='' found=false
-  case "$name" in raycast) app=Raycast.app ;; zed) app=Zed.app ;; esac
+  case "$name" in raycast) app=Raycast.app ;; zed) app=Zed.app ;; 1password) app=1Password.app ;; esac
   if [[ -n "$app" ]]; then
     [[ -d "/Applications/$app" && ! -L "/Applications/$app" ]] \
       || [[ -d "$HOME/Applications/$app" && ! -L "$HOME/Applications/$app" ]]
@@ -234,6 +251,14 @@ if [[ -x "$brew_bin" ]]; then
         "$brew_bin" bundle install --file="$scratch/Brewfile" --no-upgrade
     ) || die 'Package installation stopped. Existing app conflicts are preserved; do not force adoption.'
   fi
+fi
+if [[ "$check" == false ]]; then
+  for package in ${casks+"${casks[@]}"}; do
+    if [[ "$package" == 1password ]]; then
+      if ! account_ready 1Password; then note '1Password sign-in skipped.'; fi
+      break
+    fi
+  done
 fi
 note '[2/4] macOS preferences'
 preference_failed() {
@@ -467,7 +492,14 @@ if [[ ${#mas_ids[@]} -gt 0 ]]; then
       fi
     done
   fi
+  mas_ready=true
   if [[ "$check" == false && "$mas_pending" == true ]]; then
+    if ! account_ready 'App Store'; then
+      mas_ready=false
+      unresolved+=('App Store apps skipped by request.')
+    fi
+  fi
+  if [[ "$check" == false && "$mas_pending" == true && "$mas_ready" == true ]]; then
     printf '%s\n' "${mas_declarations[@]}" > "$scratch/AppStore.Brewfile"
     if (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/AppStore.Brewfile" --no-upgrade); then
       if ! installed_mas="$(clean_run "$mas_bin" list)"; then

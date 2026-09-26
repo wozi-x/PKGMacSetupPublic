@@ -8,4 +8,5 @@ brew "zsh-autosuggestions"
 brew "zsh-syntax-highlighting"
 cask "raycast"
 cask "zed"
+cask "1password"
 mas "Amphetamine", id: 937984704

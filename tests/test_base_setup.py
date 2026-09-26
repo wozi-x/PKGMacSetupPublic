@@ -401,7 +401,7 @@ else:
                 self.assertEqual(list(self.home.iterdir()), [])
 
     def test_external_apps_and_existing_dotfiles_are_preserved(self):
-        for app in ("Raycast.app", "Zed.app"):
+        for app in ("Raycast.app", "Zed.app", "1Password.app"):
             (self.apps / app).mkdir()
         (self.home / ".zshrc").write_text("# existing private setup\n")
         output = self.run_base()

@@ -17,11 +17,16 @@ Apple installation and rerun. Existing Homebrew is reused. Application login and
 Raycast permissions remain interactive.
 
 The default packages are git, gh, jq, mas, tmux, zsh-autosuggestions,
-zsh-syntax-highlighting, Raycast, Zed and Amphetamine. Amphetamine is installed
+zsh-syntax-highlighting, Raycast, Zed, 1Password and Amphetamine. Amphetamine is installed
 from the Mac App Store after common packages, preferences and shell setup finish.
 Use the same existing App Store account on Base, Development and Administration
 Macs. If sign-in or installation is unavailable, common setup finishes and Base
-reports the App Store work as pending; sign in and rerun. No language runtimes, cloud tooling,
+reports the App Store work as pending. Interactive setup opens 1Password after
+package installation and the App Store before missing App Store apps are
+installed. Take as long as needed, then press Return to continue; s skips the
+step and q cancels setup. Sign-in stays inside the apps. Check mode never opens
+apps or prompts, and noninteractive runs retain their existing behavior.
+No language runtimes, cloud tooling,
 iOS tooling, credentials, personal agent configuration or private services are
 installed. Projects and the device owner choose their additional requirements.
 
