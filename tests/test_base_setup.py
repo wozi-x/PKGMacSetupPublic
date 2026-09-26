@@ -66,9 +66,16 @@ elif kind == "brew":
                     continue
                 if match[2] not in state[category]:
                     state[category].append(match[2])
+            match = re.match(r'mas "([^"]+)", id: ([0-9]+)', line)
+            if match:
+                state.setdefault("mas", {})[match[2]] = match[1]
         state_file.write_text(json.dumps(state))
     else:
         raise AssertionError(args)
+elif kind == "mas":
+    assert args == ["list"]
+    for app_id, name in state.get("mas", {}).items():
+        print(app_id + " " + name + " (1.0)")
 elif kind == "defaults":
     key = args[1] + " " + args[2]
     if args[0] == "read":
@@ -102,7 +109,7 @@ else:
 '''
         )
         self.provider.chmod(0o755)
-        for name in ("brew", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
+        for name in ("brew", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
             (self.bin / name).symlink_to(self.provider)
         self.script = self.root / "setup.sh"
         source = (ROOT / "setup.sh").read_text()
@@ -136,6 +143,9 @@ else:
 
     def test_first_run_rerun_and_check(self):
         self.run_base()
+        installed = json.loads(self.state.read_text())
+        self.assertIn("mas", installed["formulae"])
+        self.assertEqual(installed["mas"], {"937984704": "Amphetamine"})
         state = self.state.read_bytes()
         dots = {p.name: p.read_bytes() for p in self.home.iterdir()}
         before = len(self.calls())

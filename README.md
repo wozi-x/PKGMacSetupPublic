@@ -16,8 +16,10 @@ Command Line Tools dialog and Homebrew's administrator prompt. Complete a pendin
 Apple installation and rerun. Existing Homebrew is reused. Application login and
 Raycast permissions remain interactive.
 
-The default packages are git, gh, jq, tmux, zsh-autosuggestions,
-zsh-syntax-highlighting, Raycast and Zed. No language runtimes, cloud tooling,
+The default packages are git, gh, jq, mas, tmux, zsh-autosuggestions,
+zsh-syntax-highlighting, Raycast, Zed and Amphetamine. Amphetamine is installed
+from the Mac App Store through Homebrew Bundle and requires App Store sign-in
+before running setup. No language runtimes, cloud tooling,
 iOS tooling, credentials, personal agent configuration or private services are
 installed. Projects and the device owner choose their additional requirements.
 
