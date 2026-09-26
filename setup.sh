@@ -232,14 +232,22 @@ preference_failed() {
   printf 'Warning: preference not applied: %s %s (%s). Continuing setup.\n' "$1" "$2" "$3" >&2
 }
 preference() {
-  local domain="$1" key="$2" kind="$3" desired="$4" current='' status
+  local domain="$1" key="$2" kind="$3" desired="$4" current='' status write_value="$4"
+  # defaults reads booleans as 1/0, but its documented write syntax uses words.
+  if [[ "$kind" == bool ]]; then
+    case "$desired" in
+      1) write_value=true ;;
+      0) write_value=false ;;
+      *) die "Invalid boolean preference: $domain $key" ;;
+    esac
+  fi
   current="$(/usr/bin/defaults read "$domain" "$key" 2>/dev/null || true)"
   if [[ "$current" != "$desired" ]]; then
     if [[ "$check" == true ]]; then
       pending "Preference: $domain $key -> $desired"
     else
       note "Set preference: $domain $key -> $desired"
-      if /usr/bin/defaults write "$domain" "$key" "-$kind" "$desired"; then
+      if /usr/bin/defaults write "$domain" "$key" "-$kind" "$write_value"; then
         if current="$(/usr/bin/defaults read "$domain" "$key")"; then
           if [[ "$current" != "$desired" ]]; then
             preference_failed "$domain" "$key" 'value did not persist'

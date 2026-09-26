@@ -94,7 +94,13 @@ elif kind == "defaults":
             sys.exit(0)
         if failure == "read":
             state.setdefault("unreadable_preferences", []).append(key)
-        state["preferences"][key] = args[4]
+        value = args[4]
+        if args[3] == "-bool":
+            if value not in ("true", "false"):
+                print("Boolean value must be true or false", file=sys.stderr)
+                sys.exit(255)
+            value = "1" if value == "true" else "0"
+        state["preferences"][key] = value
         state_file.write_text(json.dumps(state))
     else:
         raise AssertionError(args)
@@ -159,6 +165,22 @@ else:
         self.assertFalse(any(c[0] == "brew" and c[1][0] != "list" for c in self.calls()[before:]))
         self.assertEqual(self.state.read_bytes(), state)
         self.assertEqual({p.name: p.read_bytes() for p in self.home.iterdir()}, dots)
+
+    def test_boolean_writes_use_words_and_numeric_readback(self):
+        args = self.selection(prefs="finder=true\nkeyboard=true\ntrackpad=true\ndock=true\n")
+        self.run_base(*args)
+        writes = [call[1] for call in self.calls() if call[0] == "defaults" and call[1][0] == "write"]
+        booleans = [call for call in writes if call[3] == "-bool"]
+        self.assertTrue(booleans)
+        self.assertEqual({call[4] for call in booleans}, {"true", "false"})
+        self.assertIn(["write", "com.apple.AppleMultitouchTrackpad", "Clicking", "-int", "1"], writes)
+        values = json.loads(self.state.read_text())["preferences"]
+        self.assertEqual(values["com.apple.finder ShowPathbar"], "1")
+        self.assertEqual(values["com.apple.dock show-recents"], "0")
+        before = len(self.calls())
+        self.run_base(*args)
+        self.run_base(*args, "--check")
+        self.assertFalse(any(call[0] == "defaults" and call[1][0] == "write" for call in self.calls()[before:]))
 
     def test_check_reports_drift_without_mutations(self):
         original = self.state.read_bytes()
