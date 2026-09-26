@@ -8,6 +8,7 @@ check=false
 config_dir=''
 scratch=''
 drift=0
+preference_failures=()
 finder=false keyboard=false trackpad=false dock=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=()
 die() { printf 'Error: %s\n' "$*" >&2; exit 2; }
@@ -226,16 +227,31 @@ if [[ -x "$brew_bin" ]]; then
   fi
 fi
 note '[2/3] macOS preferences'
+preference_failed() {
+  preference_failures+=("$1 $2: $3")
+  printf 'Warning: preference not applied: %s %s (%s). Continuing setup.\n' "$1" "$2" "$3" >&2
+}
 preference() {
-  local domain="$1" key="$2" kind="$3" desired="$4" current=''
+  local domain="$1" key="$2" kind="$3" desired="$4" current='' status
   current="$(/usr/bin/defaults read "$domain" "$key" 2>/dev/null || true)"
   if [[ "$current" != "$desired" ]]; then
     if [[ "$check" == true ]]; then
       pending "Preference: $domain $key -> $desired"
     else
       note "Set preference: $domain $key -> $desired"
-      /usr/bin/defaults write "$domain" "$key" "-$kind" "$desired"
-      [[ "$(/usr/bin/defaults read "$domain" "$key")" == "$desired" ]] || die "Preference did not persist: $domain $key"
+      if /usr/bin/defaults write "$domain" "$key" "-$kind" "$desired"; then
+        if current="$(/usr/bin/defaults read "$domain" "$key")"; then
+          if [[ "$current" != "$desired" ]]; then
+            preference_failed "$domain" "$key" 'value did not persist'
+          fi
+        else
+          status=$?
+          preference_failed "$domain" "$key" "verification read failed with exit $status"
+        fi
+      else
+        status=$?
+        preference_failed "$domain" "$key" "defaults write failed with exit $status"
+      fi
     fi
   fi
 }
@@ -329,6 +345,13 @@ if [[ "$check" == true ]]; then
   [[ "$drift" == 0 ]] || { note 'Base has pending changes.'; exit 1; }
   note '[OK] Base is ready for the selected configuration.'
 else
+  if [[ ${#preference_failures[@]} -gt 0 ]]; then
+    note 'Base setup incomplete: packages and shell configuration finished, but these preferences remain unresolved:'
+    printf '  - %s\n' "${preference_failures[@]}"
+    note 'Review the defaults errors above in the client Mac terminal. Rerun Base as the same ordinary user after resolving the write or verification failure.'
+    note 'Use --check to report remaining changes. No preference permissions or management policies were overridden.'
+    exit 1
+  fi
   note '[OK] Base setup completed. Open a new shell; preferences may require an app restart or logout.'
   note 'Raycast permissions, application sign-in and App Store authentication remain interactive.'
 fi

@@ -84,6 +84,15 @@ No Dock icons are cleared, applications killed, Remote Login enabled, Mac name
 changed or security permissions overridden. A logout or later app restart may
 be needed for macOS to display some changes.
 
+A failed preference write or read-back verification is reported with its domain
+and key. Base continues with the remaining preferences and shell configuration,
+then exits 1 with an incomplete-setup summary instead of reporting success.
+Review the original `defaults` error in the client Mac terminal, resolve the
+reported failure, and rerun as the same ordinary user. Base does not change
+preference-file ownership or override macOS permissions or management policies.
+Use `--check` to see what remains pending. Package failures still stop setup
+before preferences and shell configuration.
+
 Package installs use Homebrew Bundle with --no-upgrade and no cleanup.
 Unselected packages remain installed. Homebrew may still change dependencies
 to install missing packages; this is not a version lock or rollback system.

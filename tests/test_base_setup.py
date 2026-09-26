@@ -72,10 +72,21 @@ elif kind == "brew":
 elif kind == "defaults":
     key = args[1] + " " + args[2]
     if args[0] == "read":
+        if key in state.get("unreadable_preferences", []):
+            print("Could not read preference", file=sys.stderr)
+            sys.exit(1)
         if key not in state["preferences"]:
             sys.exit(1)
         print(state["preferences"][key])
     elif args[0] == "write":
+        failure = state.get("preference_failures", {}).get(key)
+        if failure == "write":
+            print("Could not write domain " + args[1], file=sys.stderr)
+            sys.exit(255)
+        if failure == "persist":
+            sys.exit(0)
+        if failure == "read":
+            state.setdefault("unreadable_preferences", []).append(key)
         state["preferences"][key] = args[4]
         state_file.write_text(json.dumps(state))
     else:
@@ -145,6 +156,60 @@ else:
         self.assertEqual(self.state.read_bytes(), original)
         self.assertEqual(list(self.home.iterdir()), [])
         self.assertFalse(any(c[0] == "defaults" and c[1][0] == "write" for c in self.calls()))
+
+    def test_preference_failures_finish_shell_and_report_incomplete(self):
+        for failure, reason in (
+            ("write", "defaults write failed with exit 255"),
+            ("persist", "value did not persist"),
+            ("read", "verification read failed with exit 1"),
+        ):
+            with self.subTest(failure=failure):
+                key = "com.apple.finder ShowPathbar"
+                self.state.write_text(json.dumps({
+                    "formulae": [], "casks": [], "preferences": {key: "0"},
+                    "preference_failures": {key: failure},
+                }))
+                for path in self.home.iterdir():
+                    path.unlink()
+                output = self.run_base(code=1)
+                self.assertIn(f"{key}: {reason}", output)
+                self.assertIn("[3/3] Shell configuration", output)
+                self.assertIn("Base setup incomplete", output)
+                self.assertNotIn("[OK] Base setup completed", output)
+                if failure == "write":
+                    self.assertIn("Could not write domain com.apple.finder", output)
+                state = json.loads(self.state.read_text())
+                self.assertEqual(state["preferences"]["com.apple.dock show-recents"], "0")
+                for name in (".zprofile", ".zshrc", ".tmux.conf"):
+                    self.assertEqual((self.home / name).read_bytes(), (ROOT / "dotfiles" / name).read_bytes())
+                self.run_base("--check", code=1)
+                # Once the provider is repaired, rerunning converges normally.
+                state.pop("preference_failures")
+                state.pop("unreadable_preferences", None)
+                self.state.write_text(json.dumps(state))
+                self.run_base()
+                self.run_base("--check")
+
+    def test_multiple_preference_failures_preserve_existing_shell_bytes(self):
+        args = self.selection(prefs="finder=true\n")
+        (self.config / "dotfiles").mkdir()
+        (self.config / "dotfiles/.zshrc").write_text("# client fragment\n")
+        (self.home / ".zshrc").write_text("# existing bytes\n")
+        state = json.loads(self.state.read_text())
+        state["preferences"]["com.apple.finder ShowStatusBar"] = "0"
+        state["preference_failures"] = {
+            "com.apple.finder ShowPathbar": "write",
+            "com.apple.finder ShowStatusBar": "persist",
+        }
+        self.state.write_text(json.dumps(state))
+        output = self.run_base(*args, code=1)
+        self.assertIn("  - com.apple.finder ShowPathbar: defaults write failed with exit 255", output)
+        self.assertIn("  - com.apple.finder ShowStatusBar: value did not persist", output)
+        self.assertTrue((self.home / ".zshrc").read_text().startswith("# existing bytes\n"))
+        self.assertEqual((self.home / ".config/macsetup/base/zshrc").read_text(), "# client fragment\n")
+        original = (self.home / ".zshrc").read_bytes()
+        self.run_base(*args, code=1)
+        self.assertEqual((self.home / ".zshrc").read_bytes(), original)
 
     def test_empty_and_single_kind_selections(self):
         for brewfile in ("", 'brew "git"\n', 'cask "raycast"\n'):
