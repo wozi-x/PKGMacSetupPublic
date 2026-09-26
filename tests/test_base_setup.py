@@ -31,7 +31,7 @@ class BaseSetupTests(unittest.TestCase):
         self.provider.write_text(
             f"#!{sys.executable}\n"
             + r'''
-import json, os, pathlib, re, sys
+import json, os, pathlib, plistlib, re, sys
 root = pathlib.Path(__file__).resolve().parent.parent
 kind = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -58,6 +58,9 @@ elif kind == "brew":
         if (root / "bundle-fail").exists():
             sys.exit(4)
         brewfile = pathlib.Path(next(a[7:] for a in args if a.startswith("--file=")))
+        if brewfile.name == "AppStore.Brewfile" and (root / "mas-fail").exists():
+            print("App Store sign-in is required", file=sys.stderr)
+            sys.exit(4)
         for line in brewfile.read_text().splitlines():
             match = re.match(r'(brew|cask) "([^"]+)"', line)
             if match:
@@ -74,9 +77,21 @@ elif kind == "brew":
         raise AssertionError(args)
 elif kind == "mas":
     assert args == ["list"]
+    if (root / "mas-list-fail").exists():
+        sys.exit(4)
     for app_id, name in state.get("mas", {}).items():
-        print(app_id + " " + name + " (1.0)")
+        print(app_id.rjust(10) + "  " + name + " (1.0)")
 elif kind == "defaults":
+    if args[0] == "export":
+        print(plistlib.dumps({"AppleSymbolicHotKeys": state.get("hotkeys", {})}).decode())
+        sys.exit(0)
+    if args[0] == "write" and args[3] == "-dict-add":
+        if state.get("hotkey_failure") == "write":
+            sys.exit(255)
+        if state.get("hotkey_failure") != "persist":
+            state.setdefault("hotkeys", {})[args[4]] = plistlib.loads(("<plist>" + args[5] + "</plist>").encode())
+            state_file.write_text(json.dumps(state))
+        sys.exit(0)
     key = args[1] + " " + args[2]
     if args[0] == "read":
         if key in state.get("unreadable_preferences", []):
@@ -189,6 +204,55 @@ else:
         self.assertEqual(list(self.home.iterdir()), [])
         self.assertFalse(any(c[0] == "defaults" and c[1][0] == "write" for c in self.calls()))
 
+    def test_keyboard_shortcuts_preserve_other_keys_and_detect_drift(self):
+        args = self.selection(prefs="keyboard=true\n")
+        state = json.loads(self.state.read_text())
+        state["hotkeys"] = {"99": {"enabled": True, "custom": "preserve"}}
+        self.state.write_text(json.dumps(state))
+        self.run_base(*args)
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["hotkeys"]["99"], {"enabled": True, "custom": "preserve"})
+        self.assertFalse(state["hotkeys"]["64"]["enabled"])
+        self.assertEqual(state["hotkeys"]["61"], {
+            "enabled": True, "value": {"type": "standard", "parameters": [32, 49, 1048576]},
+        })
+        state["hotkeys"]["61"]["value"]["parameters"] = [32, 49, 262144]
+        self.state.write_text(json.dumps(state))
+        before = self.state.read_bytes()
+        self.assertIn("Keyboard shortcut: 61", self.run_base(*args, "--check", code=1))
+        self.assertEqual(self.state.read_bytes(), before)
+        self.run_base(*args)
+        self.run_base(*args, "--check")
+
+    def test_keyboard_shortcut_failure_is_pending_after_shell_finishes(self):
+        for failure in ("write", "persist"):
+            with self.subTest(failure=failure):
+                state = json.loads(self.state.read_text())
+                state["hotkey_failure"] = failure
+                self.state.write_text(json.dumps(state))
+                output = self.run_base(code=3)
+                self.assertIn("com.apple.symbolichotkeys", output)
+                self.assertTrue((self.home / ".zshrc").exists())
+
+    def test_keyboard_false_does_not_change_shortcuts(self):
+        args = self.selection(prefs="keyboard=false\n")
+        self.run_base(*args)
+        self.run_base(*args, "--check")
+        self.assertFalse(any(c[0] == "defaults" for c in self.calls()))
+
+    def test_unsafe_keyboard_preferences_fail_before_changes(self):
+        prefs = self.home / "Library/Preferences"
+        prefs.mkdir(parents=True)
+        target = prefs / "com.apple.symbolichotkeys.plist"
+        target.write_text("malformed plist")
+        self.run_base(code=2)
+        self.assertEqual(target.read_text(), "malformed plist")
+        target.unlink()
+        target.symlink_to(self.state)
+        self.run_base(code=2)
+        self.assertTrue(target.is_symlink())
+        self.assertFalse(any(c[0] in ("brew", "mas", "defaults") for c in self.calls()))
+
     def test_preference_failures_finish_shell_and_report_incomplete(self):
         for failure, reason in (
             ("write", "defaults write failed with exit 255"),
@@ -203,9 +267,9 @@ else:
                 }))
                 for path in self.home.iterdir():
                     path.unlink()
-                output = self.run_base(code=1)
+                output = self.run_base(code=3)
                 self.assertIn(f"{key}: {reason}", output)
-                self.assertIn("[3/3] Shell configuration", output)
+                self.assertIn("[3/4] Shell configuration", output)
                 self.assertIn("Base setup incomplete", output)
                 self.assertNotIn("[OK] Base setup completed", output)
                 if failure == "write":
@@ -234,13 +298,13 @@ else:
             "com.apple.finder ShowStatusBar": "persist",
         }
         self.state.write_text(json.dumps(state))
-        output = self.run_base(*args, code=1)
+        output = self.run_base(*args, code=3)
         self.assertIn("  - com.apple.finder ShowPathbar: defaults write failed with exit 255", output)
         self.assertIn("  - com.apple.finder ShowStatusBar: value did not persist", output)
         self.assertTrue((self.home / ".zshrc").read_text().startswith("# existing bytes\n"))
         self.assertEqual((self.home / ".config/macsetup/base/zshrc").read_text(), "# client fragment\n")
         original = (self.home / ".zshrc").read_bytes()
-        self.run_base(*args, code=1)
+        self.run_base(*args, code=3)
         self.assertEqual((self.home / ".zshrc").read_bytes(), original)
 
     def test_empty_and_single_kind_selections(self):
@@ -270,9 +334,63 @@ else:
         for app in ("Raycast.app", "Zed.app"):
             (self.apps / app).mkdir()
         (self.home / ".zshrc").write_text("# existing private setup\n")
-        self.run_base()
+        output = self.run_base(code=3)
+        self.assertIn("Unmanaged dotfile differs from the common default: .zshrc", output)
         self.assertEqual((self.home / ".zshrc").read_text(), "# existing private setup\n")
         self.assertEqual(json.loads(self.state.read_text())["casks"], [])
+        self.run_base("--check", code=1)
+
+    def test_default_dotfile_drift_is_preserved_and_not_reported_ready(self):
+        self.run_base()
+        (self.home / ".tmux.conf").write_text("set -g prefix C-z\n")
+        before = (self.home / ".tmux.conf").read_bytes()
+        for args, code in (((), 3), (("--check",), 1)):
+            output = self.run_base(*args, code=code)
+            self.assertIn("Unmanaged dotfile differs from the common default: .tmux.conf", output)
+            self.assertNotIn("[OK]", output)
+            self.assertEqual((self.home / ".tmux.conf").read_bytes(), before)
+
+    def test_app_store_failure_finishes_common_setup_then_recovers(self):
+        (self.root / "mas-fail").touch()
+        output = self.run_base(code=3)
+        self.assertIn("App Store apps remain pending", output)
+        self.assertNotIn("[OK]", output)
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["preferences"]["com.apple.dock show-recents"], "0")
+        self.assertEqual((self.home / ".tmux.conf").read_bytes(), (ROOT / "dotfiles/.tmux.conf").read_bytes())
+        calls = self.calls()
+        app_store = next(i for i, c in enumerate(calls) if c[0] == "brew" and any("AppStore.Brewfile" in a for a in c[1]))
+        self.assertTrue(all(i < app_store for i, c in enumerate(calls) if c[0] == "defaults"))
+        self.run_base("--check", code=1)
+        (self.root / "mas-fail").unlink()
+        self.run_base()
+        before = len(self.calls())
+        self.run_base()
+        self.assertFalse(any("AppStore.Brewfile" in a for c in self.calls()[before:] for a in c[1]))
+        self.run_base("--check")
+
+    def test_app_store_inventory_failure_does_not_block_common_setup(self):
+        (self.root / "mas-list-fail").touch()
+        output = self.run_base(code=3)
+        self.assertIn("App Store inventory could not be verified", output)
+        self.assertTrue((self.home / ".zshrc").exists())
+        self.run_base("--check", code=1)
+
+    def test_app_store_requires_mas_declaration_before_mutation(self):
+        args = self.selection('mas "Amphetamine", id: 937984704\n')
+        self.run_base(*args, code=2)
+        self.assertFalse(any(c[0] in ("brew", "mas", "defaults") for c in self.calls()))
+
+    def test_app_store_padded_ids_match_exactly(self):
+        self.run_base()
+        state = json.loads(self.state.read_text())
+        state["mas"]["1937984704"] = "Different app with suffix matching Amphetamine"
+        self.state.write_text(json.dumps(state))
+        self.run_base("--check")
+        del state["mas"]["937984704"]
+        self.state.write_text(json.dumps(state))
+        self.assertIn("App Store app: 937984704", self.run_base("--check", code=1))
+        self.run_base()
         self.run_base("--check")
 
     def test_generic_external_app_uses_only_public_json(self):
