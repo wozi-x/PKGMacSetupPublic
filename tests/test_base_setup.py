@@ -92,12 +92,23 @@ elif kind == "mas":
         print(app_id.rjust(10) + "  " + name + " (1.0)")
 elif kind == "defaults":
     if args[0] == "export":
-        print(plistlib.dumps({"AppleSymbolicHotKeys": state.get("hotkeys", {})}).decode())
+        hotkeys = state.get("hotkeys", {})
+        if state.get("hotkey_reads_remaining", 0):
+            hotkeys = state.get("previous_hotkeys", {})
+            state["hotkey_reads_remaining"] -= 1
+            state_file.write_text(json.dumps(state))
+        if state.get("hotkey_numeric_enabled"):
+            for shortcut in hotkeys.values():
+                if isinstance(shortcut.get("enabled"), bool):
+                    shortcut["enabled"] = int(shortcut["enabled"])
+        print(plistlib.dumps({"AppleSymbolicHotKeys": hotkeys}).decode())
         sys.exit(0)
     if args[0] == "write" and args[3] == "-dict-add":
         if state.get("hotkey_failure") == "write":
             sys.exit(255)
         if state.get("hotkey_failure") != "persist":
+            state["previous_hotkeys"] = json.loads(json.dumps(state.get("hotkeys", {})))
+            state["hotkey_reads_remaining"] = state.get("hotkey_stale_reads", 0)
             state.setdefault("hotkeys", {})[args[4]] = plistlib.loads(("<plist>" + args[5] + "</plist>").encode())
             state_file.write_text(json.dumps(state))
         sys.exit(0)
@@ -273,6 +284,23 @@ else:
                 self.assertIn("com.apple.symbolichotkeys", output)
                 self.assertTrue((self.home / ".zshrc").exists())
 
+    def test_keyboard_shortcuts_accept_numeric_booleans_and_delayed_readback(self):
+        args = self.selection(prefs="keyboard=true\n")
+        state = json.loads(self.state.read_text())
+        state["hotkey_numeric_enabled"] = True
+        state["hotkey_stale_reads"] = 2
+        self.state.write_text(json.dumps(state))
+        self.run_base(*args)
+        before = len(self.calls())
+        self.run_base(*args)
+        self.run_base(*args, "--check")
+        self.assertFalse(any(c[0] == "defaults" and c[1][0] == "write" for c in self.calls()[before:]))
+        # A real change to the enabled state must still be detected.
+        state = json.loads(self.state.read_text())
+        state["hotkeys"]["64"]["enabled"] = 1
+        self.state.write_text(json.dumps(state))
+        self.assertIn("Keyboard shortcut: 64", self.run_base(*args, "--check", code=1))
+
     def test_keyboard_false_does_not_change_shortcuts(self):
         args = self.selection(prefs="keyboard=false\n")
         self.run_base(*args)
@@ -376,20 +404,20 @@ else:
         for app in ("Raycast.app", "Zed.app"):
             (self.apps / app).mkdir()
         (self.home / ".zshrc").write_text("# existing private setup\n")
-        output = self.run_base(code=3)
-        self.assertIn("Unmanaged dotfile differs from the common default: .zshrc", output)
+        output = self.run_base()
+        self.assertIn("Preserved existing dotfile: .zshrc", output)
         self.assertEqual((self.home / ".zshrc").read_text(), "# existing private setup\n")
         self.assertEqual(json.loads(self.state.read_text())["casks"], [])
-        self.run_base("--check", code=1)
+        self.run_base("--check")
 
-    def test_default_dotfile_drift_is_preserved_and_not_reported_ready(self):
+    def test_existing_default_dotfiles_are_preserved_without_incomplete_status(self):
         self.run_base()
         (self.home / ".tmux.conf").write_text("set -g prefix C-z\n")
         before = (self.home / ".tmux.conf").read_bytes()
-        for args, code in (((), 3), (("--check",), 1)):
-            output = self.run_base(*args, code=code)
-            self.assertIn("Unmanaged dotfile differs from the common default: .tmux.conf", output)
-            self.assertNotIn("[OK]", output)
+        for args in ((), ("--check",)):
+            output = self.run_base(*args)
+            self.assertIn("Preserved existing dotfile: .tmux.conf", output)
+            self.assertIn("[OK]", output)
             self.assertEqual((self.home / ".tmux.conf").read_bytes(), before)
 
     def test_app_store_failure_finishes_common_setup_then_recovers(self):

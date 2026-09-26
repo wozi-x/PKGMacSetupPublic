@@ -273,13 +273,30 @@ preference() {
 # Only these two fixed shortcuts are managed; dict-add preserves other hotkeys.
 hotkey_matches() {
   local hotkey="$1" snapshot enabled parameters kind
+  hotkey_observation='preference export unavailable'
   snapshot="$(/usr/bin/defaults export com.apple.symbolichotkeys - 2>/dev/null)" || return 1
+  hotkey_observation='enabled flag unavailable'
   enabled="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract "AppleSymbolicHotKeys.$hotkey.enabled" raw -o - - 2>/dev/null)" || return 1
-  if [[ "$hotkey" == 64 ]]; then [[ "$enabled" == false ]]; return; fi
-  [[ "$enabled" == true ]] || return 1
+  case "$enabled" in
+    false|0) hotkey_observation='enabled flag is off' ;;
+    true|1) hotkey_observation='enabled flag is on' ;;
+    *) hotkey_observation='enabled flag has an unsupported value' ;;
+  esac
+  # macOS preferences can export CFBoolean values or numeric 0/1 values.
+  if [[ "$hotkey" == 64 ]]; then [[ "$enabled" == false || "$enabled" == 0 ]]; return; fi
+  [[ "$enabled" == true || "$enabled" == 1 ]] || return 1
+  hotkey_observation='shortcut parameters unavailable or different'
   parameters="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract AppleSymbolicHotKeys.61.value.parameters json -o - - 2>/dev/null)" || return 1
   kind="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract AppleSymbolicHotKeys.61.value.type raw -o - - 2>/dev/null)" || return 1
   [[ "$parameters" == '[32,49,1048576]' && "$kind" == standard ]]
+}
+hotkey_persisted() {
+  local attempt
+  for attempt in 1 2 3; do
+    hotkey_matches "$1" && return 0
+    [[ "$attempt" == 3 ]] || /bin/sleep 0.2
+  done
+  return 1
 }
 keyboard_shortcuts() {
   local hotkey payload
@@ -297,8 +314,8 @@ keyboard_shortcuts() {
     note "Set keyboard shortcut: $hotkey (Command-Space switches input source)"
     if ! /usr/bin/defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$hotkey" "$payload"; then
       preference_failed com.apple.symbolichotkeys "$hotkey" 'shortcut write failed'
-    elif ! hotkey_matches "$hotkey"; then
-      preference_failed com.apple.symbolichotkeys "$hotkey" 'shortcut did not persist'
+    elif ! hotkey_persisted "$hotkey"; then
+      preference_failed com.apple.symbolichotkeys "$hotkey" "shortcut did not persist ($hotkey_observation)"
     fi
   done
 }
@@ -400,10 +417,7 @@ for name in ${dotfiles+"${dotfiles[@]}"}; do
     fi
   elif [[ -e "$destination" || -L "$destination" ]]; then
     note "Preserved existing dotfile: $name"
-    if [[ -L "$destination" || ! -f "$destination" ]] || ! /usr/bin/cmp -s -- "$source_file" "$destination"; then
-      pending "Unmanaged dotfile differs from the common default: $name"
-      unresolved+=("$name: existing configuration preserved; select reviewed dotfile fragments with --config-dir to manage common settings.")
-    fi
+    note 'Default dotfiles are create-only; existing customizations do not require repair.'
   elif [[ "$check" == true ]]; then
     pending "Default dotfile: $name"
   else

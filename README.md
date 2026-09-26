@@ -81,9 +81,11 @@ Homebrew path, shell plugins and tmux aliases
 are available in newly created shell files. Existing shell customization stays
 with its current owner.
 
-Existing files that differ from these defaults are reported as unmanaged and
-pending, in both setup and `--check`; they are preserved and do not count as a
-verified common experience. To deliberately adopt the public defaults on an
+Existing files that differ from these defaults are preserved and reported for
+information only, in both setup and `--check`. They do not make setup incomplete:
+the default policy creates missing files and leaves existing customization alone.
+This does not verify the contents or runtime behavior of existing shell files.
+To deliberately adopt the public defaults on an
 existing Mac, review `dotfiles/` and select this checkout as the configuration:
 
 ~~~sh
