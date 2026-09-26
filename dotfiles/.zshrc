@@ -1,10 +1,13 @@
 # Base shell conveniences. Existing shell files are never replaced by defaults.
-export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME="${ZSH_THEME:-robbyrussell}"
-plugins=(git)
-if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
+# BEGIN BASE MANAGED OH MY ZSH
+if (( ! $+functions[omz] )); then
+  export ZSH="$HOME/.oh-my-zsh"
+  ZSH_THEME="${ZSH_THEME-robbyrussell}"
+  (( ${+plugins} )) || plugins=(git)
   source "$ZSH/oh-my-zsh.sh"
 fi
+typeset -g _PKGMACSETUP_OMZ_LOADED=1
+# END BASE MANAGED OH MY ZSH
 
 alias ta='tmux attach -t'
 alias tl='tmux ls'

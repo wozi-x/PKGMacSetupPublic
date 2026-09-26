@@ -5,6 +5,7 @@ unset BASH_ENV ENV CDPATH RUBYOPT RUBYLIB PYTHONPATH PYTHONHOME
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 base_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 check=false
+migrate_ohmyzsh=true
 config_dir=''
 scratch=''
 drift=0
@@ -34,11 +35,12 @@ trap 'exit 143' TERM HUP
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) check=true; shift ;;
+    --skip-oh-my-zsh-migration) migrate_ohmyzsh=false; shift ;;
     --config-dir)
       [[ $# -ge 2 && -z "$config_dir" ]] || die 'Use --config-dir once, with a directory.'
       config_dir="$2"; shift 2 ;;
     -h|--help)
-      note 'Usage: ./install.sh [--config-dir LOCAL_DIR] [--check]'
+      note 'Usage: ./install.sh [--config-dir LOCAL_DIR] [--check] [--skip-oh-my-zsh-migration]'
       note 'Apply the selected Base setup, or report drift without changing it.'
       exit 0 ;;
     *) die "Unknown option: $1" ;;
@@ -425,6 +427,12 @@ for name in ${dotfiles+"${dotfiles[@]}"}; do
     note "Created default dotfile: $name"
   fi
 done
+if [[ "$migrate_ohmyzsh" == true && "$local_dots" == false ]]; then
+  if ! clean_run /bin/bash -p "$base_dir/migrate-ohmyzsh.sh" "$check"; then
+    pending 'Oh My Zsh startup migration requires attention.'
+    unresolved+=('Oh My Zsh startup was not verified; review the migration message above.')
+  fi
+fi
 note '[4/4] App Store applications'
 if [[ ${#mas_ids[@]} -gt 0 ]]; then
   mas_bin="$(dirname "$brew_bin")/mas"

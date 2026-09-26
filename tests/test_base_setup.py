@@ -83,7 +83,7 @@ elif kind == "git":
         sys.exit(1)
     destination = pathlib.Path(args[7])
     destination.mkdir()
-    (destination / "oh-my-zsh.sh").write_text("# fixture; never executed\n")
+    (destination / "oh-my-zsh.sh").write_text("function omz() { :; }\n")
 elif kind == "mas":
     assert args == ["list"]
     if (root / "mas-list-fail").exists():
@@ -161,7 +161,7 @@ else:
         source = source.replace('"/Applications/', f'"{self.apps}/')
         self.script.write_text(source)
         self.script.chmod(0o755)
-        for name in ("Brewfile", "preferences.conf"):
+        for name in ("Brewfile", "preferences.conf", "migrate-ohmyzsh.sh"):
             shutil.copyfile(ROOT / name, self.root / name)
         shutil.copytree(ROOT / "dotfiles", self.root / "dotfiles")
 
@@ -215,9 +215,9 @@ else:
     def test_existing_ohmyzsh_is_preserved_without_fetch(self):
         target = self.home / ".oh-my-zsh"
         target.mkdir()
-        (target / "oh-my-zsh.sh").write_text("# custom existing framework\n")
+        (target / "oh-my-zsh.sh").write_text("function omz() { :; } # existing\n")
         self.run_base(*self.selection())
-        self.assertEqual((target / "oh-my-zsh.sh").read_text(), "# custom existing framework\n")
+        self.assertEqual((target / "oh-my-zsh.sh").read_text(), "function omz() { :; } # existing\n")
         self.assertFalse(any(c[0] == "git" for c in self.calls()))
 
     def test_unsafe_or_incomplete_ohmyzsh_fails_before_package_mutation(self):
@@ -406,7 +406,10 @@ else:
         (self.home / ".zshrc").write_text("# existing private setup\n")
         output = self.run_base()
         self.assertIn("Preserved existing dotfile: .zshrc", output)
-        self.assertEqual((self.home / ".zshrc").read_text(), "# existing private setup\n")
+        self.assertTrue((self.home / ".zshrc").read_text().startswith("# existing private setup\n"))
+        backups = list(self.home.glob(".zshrc.pre-base-ohmyzsh.*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(), "# existing private setup\n")
         self.assertEqual(json.loads(self.state.read_text())["casks"], [])
         self.run_base("--check")
 

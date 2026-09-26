@@ -69,20 +69,40 @@ are rejected without repair.
 
 Base installs Oh My Zsh from its official Git repository into `~/.oh-my-zsh`.
 Existing installations are preserved without updates. Setup never runs the
-upstream installer, starts a shell, or changes your login shell. Check mode
+upstream installer or changes your login shell. Check mode
 reports a missing installation without downloading anything.
 
 Without local dotfiles, the small public defaults create only missing
 .zprofile, .zshrc and .tmux.conf files. Existing files and symlinks are skipped;
 there is no Git identity default. New `.zshrc` files load Oh My Zsh with the
-`robbyrussell` theme and `git` plugin, matching Dev/Admin setup. Existing or
-explicitly selected local `.zshrc` files retain control of framework activation.
+`robbyrussell` theme and `git` plugin, matching Dev/Admin setup.
+For existing regular `.zshrc` files, Base keeps a timestamped
+`.zshrc.pre-base-ohmyzsh.*` backup and appends one guarded startup block.
+Existing bytes, theme and plugin choices are preserved. The guard skips loading
+when the `omz` function already exists, so active source lines are not duplicated.
+Commented or inactive source lines get the managed fallback.
+
+Migration checks syntax, then executes your startup commands in a fresh
+interactive, non-login Zsh with a five-second limit and no inherited credential
+environment. It verifies both the managed block and the `omz` function loaded.
+Failure restores the original `.zshrc` unless startup changed it again; in that
+case the newer file and original backup are preserved for manual review.
+Only the file edit can be rolled back, not side effects of your startup commands.
+Recognized competing frameworks, symlinks, or edited managed blocks are preserved
+and reported for attention rather than rewritten. Detection is conservative;
+it cannot statically understand every possible shell configuration.
+
+Use `--skip-oh-my-zsh-migration` to keep existing startup behavior. Explicit local
+dotfile fragments selected with `--config-dir` also retain control of activation.
+`--check` only checks the managed block and never executes your shell files.
+
 Homebrew path, shell plugins and tmux aliases
 are available in newly created shell files. Existing shell customization stays
 with its current owner.
 
 Existing files that differ from these defaults are preserved and reported for
-information only, in both setup and `--check`. They do not make setup incomplete:
+information only, in both setup and `--check`, apart from the Oh My Zsh migration
+described above. They do not otherwise make setup incomplete:
 the default policy creates missing files and leaves existing customization alone.
 This does not verify the contents or runtime behavior of existing shell files.
 To deliberately adopt the public defaults on an

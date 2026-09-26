@@ -11,10 +11,16 @@ discovers, authenticates to, downloads or continues into private repositories.
   Validate selected configuration and managed destination ancestors before writes.
 - Preserve unrelated packages and existing apps. Never broad-upgrade, uninstall,
   force-adopt or cleanup. Disclose Homebrew dependency effects.
-- Default dotfiles are create-only. Explicit local fragments update only the
+- Default dotfiles are create-only except for the fixed, backed-up Oh My Zsh
+  migration block appended to an existing regular .zshrc. Preserve existing
+  bytes, reject recognized framework conflicts, and restore on failed validation.
+  Explicit local fragments update only the
   managed files, retaining existing home-file bytes around their stable includes.
 - Keep protected Bash startup and fixed provider argv. Never source local
-  configuration during setup. Check mode must not install, persist preferences,
+  configuration in the provisioning shell. The Oh My Zsh migration alone may
+  validate a fresh interactive Zsh with bounded runtime and no inherited auth
+  environment; document that startup commands execute. Check mode must not execute
+  user startup files, install, persist preferences,
   create dotfiles or authenticate.
 - Live provisioning, publication and pushing require explicit user authorization.
   Synthetic tests must use temporary HOME and fake providers.
