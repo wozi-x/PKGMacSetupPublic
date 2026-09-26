@@ -40,8 +40,16 @@ The runner never searches for, downloads or publishes your local configuration.
 | File | Meaning |
 | --- | --- |
 | Brewfile | Complete replacement for the default package list; missing file uses the default. |
-| preferences.conf | Only finder, keyboard, trackpad and dock, each set to true or false. Omitted groups preserve existing settings. Missing file uses public preferences. |
+| preferences.conf | Only finder, keyboard, trackpad, dock and textedit, each set to true or false. Omitted groups preserve existing settings. Missing file uses public preferences. |
 | dotfiles/.zprofile, .zshrc, .tmux.conf, .gitconfig | Optional explicitly selected fragments. Only these filenames are accepted. |
+
+The default `textedit=true` makes new TextEdit documents plain text. If macOS
+blocks access to TextEdit preferences, Base reports the permission needed and
+continues shell and App Store setup, returning status 3 for unresolved items.
+Allow the app running setup to access other apps' data / Full Disk Access in
+System Settings > Privacy & Security, then quit and reopen it before retrying.
+Alternatively, choose TextEdit > Settings > New Document > Plain text manually.
+An explicit local `textedit=false` or omitted group preserves the existing format.
 
 Brewfiles accept only blank lines, comments, and these plain declarations:
 

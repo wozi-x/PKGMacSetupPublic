@@ -11,7 +11,7 @@ scratch=''
 drift=0
 preference_failures=()
 unresolved=()
-finder=false keyboard=false trackpad=false dock=false
+finder=false keyboard=false trackpad=false dock=false textedit=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
 die() { printf 'Error: %s\n' "$*" >&2; exit 2; }
 note() { printf '%s\n' "$*"; }
@@ -97,7 +97,7 @@ fi
 seen_preferences=' '
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-  [[ "$line" =~ ^(finder|keyboard|trackpad|dock)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock=true|false.'
+  [[ "$line" =~ ^(finder|keyboard|trackpad|dock|textedit)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock/textedit=true|false.'
   key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
   [[ "$seen_preferences" != *" $key "* ]] || die "Duplicate preference group: $key"
   seen_preferences+="$key "
@@ -239,6 +239,10 @@ note '[2/4] macOS preferences'
 preference_failed() {
   preference_failures+=("$1 $2: $3")
   printf 'Warning: preference not applied: %s %s (%s). Continuing setup.\n' "$1" "$2" "$3" >&2
+  if [[ "$1" == com.apple.TextEdit ]]; then
+    note "TextEdit permission: allow the app running setup (Terminal, iTerm, or your editor) to access other apps' data / Full Disk Access in System Settings > Privacy & Security, then quit and reopen it."
+    note 'Or set TextEdit > Settings > New Document > Plain text manually. If access is already allowed, review the write or verification error above.'
+  fi
 }
 preference() {
   local domain="$1" key="$2" kind="$3" desired="$4" current='' status write_value="$4"
@@ -349,6 +353,20 @@ if [[ "$dock" == true ]]; then
   preference com.apple.dock autohide bool 1
   preference com.apple.dock tilesize int 48
   preference com.apple.dock show-recents bool 0
+fi
+if [[ "$textedit" == true ]]; then
+  textedit_preferences="$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Preferences"
+  # Probe existing containers without printing file names or changing access.
+  # A missing container is allowed: defaults may create the preference normally.
+  if [[ -d "$textedit_preferences" ]] && ! /bin/ls "$textedit_preferences" >/dev/null 2>&1; then
+    if [[ "$check" == true ]]; then
+      pending 'TextEdit preferences are inaccessible; permission is required to verify plain-text format.'
+    else
+      preference_failed com.apple.TextEdit RichText 'missing access to protected preferences'
+    fi
+  else
+    preference com.apple.TextEdit RichText int 0
+  fi
 fi
 note '[3/4] Shell configuration'
 if [[ ! -d "$ohmyzsh_dir" ]]; then
