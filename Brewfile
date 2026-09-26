@@ -2,6 +2,8 @@
 brew "git"
 brew "gh"
 brew "jq"
+brew "docker"
+brew "colima"
 brew "mas"
 brew "tmux"
 brew "zsh-autosuggestions"

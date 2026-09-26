@@ -16,7 +16,7 @@ Command Line Tools dialog and Homebrew's administrator prompt. Complete a pendin
 Apple installation and rerun. Existing Homebrew is reused. Application login and
 Raycast permissions remain interactive.
 
-The default packages are git, gh, jq, mas, tmux, zsh-autosuggestions,
+The default packages are git, gh, jq, docker, colima, mas, tmux, zsh-autosuggestions,
 zsh-syntax-highlighting, Raycast, Zed, 1Password and Amphetamine. Amphetamine is installed
 from the Mac App Store after common packages, preferences and shell setup finish.
 Use the same existing App Store account on Base, Development and Administration
@@ -39,6 +39,10 @@ your purchase settings; setup does not change those settings. See the
 The shared online launcher installs 1Password Desktop before dispatching any
 route. A standalone run honors the selected local Brewfile and does not add
 1Password if that list omits it.
+
+Docker uses only the CLI and Colima's local runtime, without Docker Desktop,
+Compose or Buildx. Run `colima start` when containers are needed; setup does
+not start a VM. Java, Android, Maestro and CCC are not default packages.
 
 No language runtimes, cloud tooling,
 iOS tooling, credentials, personal agent configuration or private services are
