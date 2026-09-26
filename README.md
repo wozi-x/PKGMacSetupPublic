@@ -21,11 +21,25 @@ zsh-syntax-highlighting, Raycast, Zed, 1Password and Amphetamine. Amphetamine is
 from the Mac App Store after common packages, preferences and shell setup finish.
 Use the same existing App Store account on Base, Development and Administration
 Macs. If sign-in or installation is unavailable, common setup finishes and Base
-reports the App Store work as pending. Interactive setup opens 1Password after
-package installation and the App Store before missing App Store apps are
+reports failed App Store work as pending. Intentional skips are reported as
+deferred work and do not fail the run; --check still reports missing apps.
+When selected, 1Password is installed as a prerequisite before other packages.
+Interactive setup opens it at that point and the App Store before missing apps are
 installed. Take as long as needed, then press Return to continue; s skips the
 step and q cancels setup. Sign-in stays inside the apps. Check mode never opens
 apps or prompts, and noninteractive runs retain their existing behavior.
+
+App Store sign-in does not grant Mac administrator privileges. The installer
+reuses valid sudo authorization; otherwise its prompt explicitly asks for the
+**Mac login password** to authorize installation. Setup never stores it. Apple
+may separately ask for Apple Account authentication or Touch ID according to
+your purchase settings; setup does not change those settings. See the
+[mas authorization documentation](https://github.com/mas-cli/mas#root-privileges).
+
+The shared online launcher installs 1Password Desktop before dispatching any
+route. A standalone run honors the selected local Brewfile and does not add
+1Password if that list omits it.
+
 No language runtimes, cloud tooling,
 iOS tooling, credentials, personal agent configuration or private services are
 installed. Projects and the device owner choose their additional requirements.

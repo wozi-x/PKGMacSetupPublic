@@ -1,6 +1,7 @@
 """Exercise the actual Base shell with fake providers and a disposable HOME."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -184,6 +185,8 @@ else:
 
     def test_first_run_rerun_and_check(self):
         self.run_base()
+        bundles = [c[1] for c in self.calls() if c[0] == "brew" and c[1][:2] == ["bundle", "install"]]
+        self.assertTrue(any(a.endswith("/Prerequisites.Brewfile") for a in bundles[0]))
         installed = json.loads(self.state.read_text())
         self.assertIn("mas", installed["formulae"])
         self.assertEqual(installed["mas"], {"937984704": "Amphetamine"})
@@ -399,6 +402,17 @@ else:
                 self.run_base(*args, code=2)
                 self.assertFalse(any(c[0] in ("brew", "defaults", "curl") for c in self.calls()[before:]))
                 self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_explicit_app_store_deferral_completes_without_installing(self):
+        source = self.script.read_text()
+        source = re.sub(r"^account_ready\(\) \{.*?^\}", 'account_ready() { [[ "$1" != "App Store" ]]; }', source, flags=re.M | re.S)
+        self.script.write_text(source)
+        output = self.run_base()
+        self.assertIn("Deferred by request: App Store apps", output)
+        self.assertNotIn("Base setup incomplete", output)
+        self.assertFalse(json.loads(self.state.read_text()).get("mas"))
+        self.assertFalse(any(c[0] == "brew" and any(a.endswith("/AppStore.Brewfile") for a in c[1]) for c in self.calls()))
+        self.run_base("--check", code=1)
 
     def test_external_apps_and_existing_dotfiles_are_preserved(self):
         for app in ("Raycast.app", "Zed.app", "1Password.app"):

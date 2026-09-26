@@ -11,6 +11,7 @@ scratch=''
 drift=0
 preference_failures=()
 unresolved=()
+deferred=()
 finder=false keyboard=false trackpad=false dock=false textedit=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
 die() { printf 'Error: %s\n' "$*" >&2; exit 2; }
@@ -40,6 +41,13 @@ account_ready() {
       *) note 'Use Return, s, or q. Sign in inside the app.' ;;
     esac
   done
+}
+prepare_app_store_authorization() {
+  [[ -t 0 ]] || return 0
+  note 'App Store sign-in and Mac administrator authorization are separate.'
+  note 'The installer may need your Mac login password, even when the App Store is already signed in.'
+  clean_run /usr/bin/sudo -n -v 2>/dev/null && return 0
+  clean_run /usr/bin/sudo -v -p 'Mac login password (authorizes App Store installation): '
 }
 cleanup() {
   if [[ -n "$scratch" && "$scratch" == /private/tmp/macsetup-base.* ]]; then
@@ -225,6 +233,22 @@ external_app() {
   [[ "$found" == true ]]
 }
 skip_casks=''
+# Prepare the account app before the rest of the selected packages. Local
+# Brewfiles remain authoritative: do not add it when they omit 1Password.
+if [[ "$check" == false && -x "$brew_bin" ]]; then
+  for package in ${casks+"${casks[@]}"}; do
+    if [[ "$package" == 1password ]]; then
+      if ! clean_run "$brew_bin" list --cask -1 | /usr/bin/grep -Fxq 1password && ! external_app 1password; then
+        [[ -n "$scratch" ]] || scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
+        printf '%s\n' 'cask "1password"' > "$scratch/Prerequisites.Brewfile"
+        (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/Prerequisites.Brewfile" --no-upgrade) \
+          || die '1Password prerequisite installation failed.'
+      fi
+      if ! account_ready 1Password; then deferred+=('1Password sign-in'); fi
+      break
+    fi
+  done
+fi
 if [[ -x "$brew_bin" ]]; then
   installed_formulae="$(clean_run "$brew_bin" list --formula -1)"
   installed_casks="$(clean_run "$brew_bin" list --cask -1)"
@@ -251,14 +275,6 @@ if [[ -x "$brew_bin" ]]; then
         "$brew_bin" bundle install --file="$scratch/Brewfile" --no-upgrade
     ) || die 'Package installation stopped. Existing app conflicts are preserved; do not force adoption.'
   fi
-fi
-if [[ "$check" == false ]]; then
-  for package in ${casks+"${casks[@]}"}; do
-    if [[ "$package" == 1password ]]; then
-      if ! account_ready 1Password; then note '1Password sign-in skipped.'; fi
-      break
-    fi
-  done
 fi
 note '[2/4] macOS preferences'
 preference_failed() {
@@ -496,10 +512,17 @@ if [[ ${#mas_ids[@]} -gt 0 ]]; then
   if [[ "$check" == false && "$mas_pending" == true ]]; then
     if ! account_ready 'App Store'; then
       mas_ready=false
-      unresolved+=('App Store apps skipped by request.')
+      deferred+=('App Store apps')
     fi
   fi
   if [[ "$check" == false && "$mas_pending" == true && "$mas_ready" == true ]]; then
+    if ! prepare_app_store_authorization; then
+      mas_ready=false
+      unresolved+=('Mac administrator authorization was not completed; App Store apps were not installed.')
+    fi
+  fi
+  if [[ "$check" == false && "$mas_pending" == true && "$mas_ready" == true ]]; then
+    note 'Apple may separately request an Apple Account password or Touch ID for downloads, according to your purchase settings.'
     printf '%s\n' "${mas_declarations[@]}" > "$scratch/AppStore.Brewfile"
     if (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/AppStore.Brewfile" --no-upgrade); then
       if ! installed_mas="$(clean_run "$mas_bin" list)"; then
@@ -519,6 +542,10 @@ if [[ "$check" == true ]]; then
   [[ "$drift" == 0 ]] || { note 'Base has pending changes.'; exit 1; }
   note '[OK] Base is ready for the selected configuration.'
 else
+  if [[ ${#deferred[@]} -gt 0 ]]; then
+    printf 'Deferred by request: %s\n' "${deferred[@]}"
+    note 'Rerun Base when you are ready to complete deferred steps.'
+  fi
   if [[ ${#preference_failures[@]} -gt 0 || ${#unresolved[@]} -gt 0 ]]; then
     note 'Base setup incomplete: common setup finished with items needing attention:'
     if [[ ${#preference_failures[@]} -gt 0 ]]; then

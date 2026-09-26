@@ -42,3 +42,19 @@ class AccountPromptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"")
+
+    def test_mac_authorization_reuses_cache_and_labels_password(self):
+        function = re.search(r"^prepare_app_store_authorization\(\) \{.*?^\}", (ROOT / "setup.sh").read_text(), re.M | re.S).group()
+        for cached, denied in ((True, False), (False, False), (False, True)):
+            master, slave = pty.openpty()
+            try:
+                source = "set -eu\nnote() { printf '%s\\n' \"$*\"; }\n"
+                source += 'clean_run() { printf "CALL:%s\\n" "$*"; if [[ "$2" == -n ]]; then return ' + ('0' if cached else '1') + '; fi; return ' + ('1' if denied else '0') + '; }\n'
+                source += function + '\nprepare_app_store_authorization\n'
+                result = subprocess.run(["/bin/bash", "-c", source], stdin=slave, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 1 if denied else 0, result.stderr)
+                self.assertIn('CALL:/usr/bin/sudo -n -v', result.stdout)
+                self.assertEqual('Mac login password (authorizes App Store installation)' in result.stdout, not cached)
+            finally:
+                os.close(master)
+                os.close(slave)
