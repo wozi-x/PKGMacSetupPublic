@@ -23,7 +23,7 @@ class AccountPromptTests(unittest.TestCase):
                     process = subprocess.Popen(["/bin/bash", "-c", self.source()], stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
                     try:
                         self.assertTrue(select.select([process.stdout], [], [], 5)[0])
-                        self.assertIn(b"Open App Store", process.stdout.readline())
+                        self.assertIn(b"Sign in to or unlock App Store", process.stdout.readline())
                         self.assertIsNone(process.poll(), "must wait for human readiness")
                         os.write(master, answer)
                         stdout, stderr = process.communicate(timeout=5)

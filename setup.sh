@@ -14,8 +14,16 @@ unresolved=()
 deferred=()
 finder=false keyboard=false trackpad=false dock=false textedit=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
-die() { printf 'Error: %s\n' "$*" >&2; exit 2; }
-note() { printf '%s\n' "$*"; }
+die() { printf '  × Error: %s\n' "$*" >&2; exit 2; }
+note() { printf '  · %s\n' "$*"; }
+ready() { printf '  ✓ %s\n' "$*"; }
+heading() {
+  if [[ -t 1 && "${TERM:-}" != dumb && -z "${NO_COLOR+x}" ]]; then
+    printf '\n  \033[1m→ %s\033[0m\n' "$1"
+  else
+    printf '\n  → %s\n' "$1"
+  fi
+}
 pending() { note "Pending: $*"; drift=1; }
 clean_run() {
   /usr/bin/env -i HOME="$HOME" USER="$base_user" LOGNAME="$base_user" PATH="$PATH" \
@@ -28,26 +36,25 @@ clean_run() {
 account_ready() {
   local app="$1" answer=''
   [[ -t 0 ]] || return 0
-  note "Open $app and complete sign-in or unlock it. Already ready? Continue below."
+  note "Sign in to or unlock $app, then continue. No time limit."
   clean_run /usr/bin/open -a "$app" || note "Open $app manually to continue."
   while true; do
-    if ! read -r -p "Press Return when ready, s to skip, or q to quit: " answer; then
+    if ! read -r -p "  Return to continue · s skip · q quit > " answer; then
       exit 130
     fi
     case "$answer" in
       '') return 0 ;;
       s|S) return 1 ;;
       q|Q) exit 130 ;;
-      *) note 'Use Return, s, or q. Sign in inside the app.' ;;
+      *) note 'Choose Return, s, or q.' ;;
     esac
   done
 }
 prepare_app_store_authorization() {
   [[ -t 0 ]] || return 0
-  note 'App Store sign-in and Mac administrator authorization are separate.'
-  note 'The installer may need your Mac login password, even when the App Store is already signed in.'
+  note 'App Store installs may also need your Mac login password.'
   clean_run /usr/bin/sudo -n -v 2>/dev/null && return 0
-  clean_run /usr/bin/sudo -v -p 'Mac login password (authorizes App Store installation): '
+  clean_run /usr/bin/sudo -v -p '  Mac login password (authorizes App Store installation): '
 }
 cleanup() {
   if [[ -n "$scratch" && "$scratch" == /private/tmp/macsetup-base.* ]]; then
@@ -65,8 +72,16 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 && -z "$config_dir" ]] || die 'Use --config-dir once, with a directory.'
       config_dir="$2"; shift 2 ;;
     -h|--help)
-      note 'Usage: ./install.sh [--config-dir LOCAL_DIR] [--check] [--skip-oh-my-zsh-migration]'
-      note 'Apply the selected Base setup, or report drift without changing it.'
+      cat <<'HELP'
+Usage: ./install.sh [options]
+
+Set up everyday apps, macOS preferences and shell configuration.
+
+  --config-dir DIR           Use a local configuration directory
+  --check                    Report pending changes without applying them
+  --skip-oh-my-zsh-migration Skip Oh My Zsh startup migration
+  -h, --help                 Show help
+HELP
       exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -180,11 +195,12 @@ for source_file in "$dot_source"/*; do
   fi
 done
 shopt -u nullglob dotglob
-note 'Base workstation setup'
-note "Packages: $brewfile"
-note "Preferences: $preferences"
-note 'Homebrew may change dependencies while installing missing packages; no broad upgrade or cleanup is requested.'
-note '[1/4] Homebrew packages'
+if [[ "$check" == true ]]; then heading 'Base setup · check only'
+else heading 'Base setup'; fi
+[[ -z "$config_dir" ]] || note "Configuration: $config_dir"
+note 'Homebrew may update dependencies when installing missing packages.'
+note 'No broad upgrade or cleanup.'
+heading 'Homebrew packages'
 brew_bin=/opt/homebrew/bin/brew
 [[ "$(/usr/bin/uname -m)" == arm64 ]] || brew_bin=/usr/local/bin/brew
 if [[ ! -x "$brew_bin" ]]; then
@@ -200,7 +216,7 @@ if [[ ! -x "$brew_bin" ]]; then
       --output "$scratch/homebrew.sh" https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
     [[ -s "$scratch/homebrew.sh" ]] || die 'Homebrew installer download was empty.'
     /bin/bash -p -n "$scratch/homebrew.sh"
-    note 'Installing Homebrew using its official HTTPS installer; it may request administrator approval.'
+    note 'Installing Homebrew · administrator approval may be required'
     clean_run /bin/bash -p "$scratch/homebrew.sh"
     [[ -x "$brew_bin" ]] || die 'Homebrew remains unavailable.'
   fi
@@ -276,10 +292,10 @@ if [[ -x "$brew_bin" ]]; then
     ) || die 'Package installation stopped. Existing app conflicts are preserved; do not force adoption.'
   fi
 fi
-note '[2/4] macOS preferences'
+heading 'macOS settings'
 preference_failed() {
   preference_failures+=("$1 $2: $3")
-  printf 'Warning: preference not applied: %s %s (%s). Continuing setup.\n' "$1" "$2" "$3" >&2
+  printf '  ! Warning: preference not applied: %s %s\n    %s. Continuing setup.\n' "$1" "$2" "$3" >&2
   if [[ "$1" == com.apple.TextEdit ]]; then
     note "TextEdit permission: allow the app running setup (Terminal, iTerm, or your editor) to access other apps' data / Full Disk Access in System Settings > Privacy & Security, then quit and reopen it."
     note 'Or set TextEdit > Settings > New Document > Plain text manually. If access is already allowed, review the write or verification error above.'
@@ -409,7 +425,7 @@ if [[ "$textedit" == true ]]; then
     preference com.apple.TextEdit RichText int 0
   fi
 fi
-note '[3/4] Shell configuration'
+heading 'Shell configuration'
 if [[ ! -d "$ohmyzsh_dir" ]]; then
   if [[ "$check" == true ]]; then
     pending 'Oh My Zsh is not installed.'
@@ -423,7 +439,7 @@ if [[ ! -d "$ohmyzsh_dir" ]]; then
     safe_destination "$ohmyzsh_dir"
     [[ ! -e "$ohmyzsh_dir" ]] || die 'Oh My Zsh destination appeared during setup; preserved.'
     /bin/mv -n -- "$scratch/oh-my-zsh" "$ohmyzsh_dir"
-    note 'Installed Oh My Zsh. Existing installations are never updated by Base.'
+    ready 'Installed Oh My Zsh'
   fi
 else
   note 'Preserved existing Oh My Zsh installation.'
@@ -466,24 +482,23 @@ for name in ${dotfiles+"${dotfiles[@]}"}; do
         /bin/mkdir -p -- "$HOME/.config/macsetup/base"
         /bin/cp -- "$source_file" "$fragment"
         /bin/chmod 600 "$fragment"
-        note "Updated managed dotfile: $name"
+        ready "Updated managed dotfile: $name"
       fi
     fi
     if [[ "$included" == false ]]; then
       if [[ "$check" == true ]]; then pending "Dotfile include: $name"
       else
         printf '\n%s\n' "$include" >> "$destination"
-        note "Added dotfile include: $name"
+        ready "Added dotfile include: $name"
       fi
     fi
   elif [[ -e "$destination" || -L "$destination" ]]; then
     note "Preserved existing dotfile: $name"
-    note 'Default dotfiles are create-only; existing customizations do not require repair.'
   elif [[ "$check" == true ]]; then
     pending "Default dotfile: $name"
   else
     /bin/cp -n -- "$source_file" "$destination"
-    note "Created default dotfile: $name"
+    ready "Created default dotfile: $name"
   fi
 done
 if [[ "$migrate_ohmyzsh" == true && "$local_dots" == false ]]; then
@@ -492,7 +507,7 @@ if [[ "$migrate_ohmyzsh" == true && "$local_dots" == false ]]; then
     unresolved+=('Oh My Zsh startup was not verified; review the migration message above.')
   fi
 fi
-note '[4/4] App Store applications'
+heading 'App Store apps'
 if [[ ${#mas_ids[@]} -gt 0 ]]; then
   mas_bin="$(dirname "$brew_bin")/mas"
   mas_pending=false
@@ -522,7 +537,7 @@ if [[ ${#mas_ids[@]} -gt 0 ]]; then
     fi
   fi
   if [[ "$check" == false && "$mas_pending" == true && "$mas_ready" == true ]]; then
-    note 'Apple may separately request an Apple Account password or Touch ID for downloads, according to your purchase settings.'
+    note 'Apple may request your Apple Account password or Touch ID for downloads.'
     printf '%s\n' "${mas_declarations[@]}" > "$scratch/AppStore.Brewfile"
     if (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/AppStore.Brewfile" --no-upgrade); then
       if ! installed_mas="$(clean_run "$mas_bin" list)"; then
@@ -539,23 +554,27 @@ if [[ ${#mas_ids[@]} -gt 0 ]]; then
   fi
 fi
 if [[ "$check" == true ]]; then
-  [[ "$drift" == 0 ]] || { note 'Base has pending changes.'; exit 1; }
-  note '[OK] Base is ready for the selected configuration.'
+  [[ "$drift" == 0 ]] || { printf '\n  ! Base has pending changes.\n'; exit 1; }
+  printf '\n'
+  ready 'Base is ready for the selected configuration.'
 else
-  if [[ ${#deferred[@]} -gt 0 ]]; then
-    printf 'Deferred by request: %s\n' "${deferred[@]}"
-    note 'Rerun Base when you are ready to complete deferred steps.'
-  fi
+  printf '\n'
   if [[ ${#preference_failures[@]} -gt 0 || ${#unresolved[@]} -gt 0 ]]; then
-    note 'Base setup incomplete: common setup finished with items needing attention:'
+    printf '  ! Base needs attention\n'
     if [[ ${#preference_failures[@]} -gt 0 ]]; then
-      printf '  - %s\n' "${preference_failures[@]}"
-      note 'Review the defaults errors above. Rerun as the same ordinary user after resolving the write or verification failure.'
+      printf '    - %s\n' "${preference_failures[@]}"
+      note 'Resolve the preference errors above, then rerun as the same user.'
     fi
-    [[ ${#unresolved[@]} == 0 ]] || printf '  - %s\n' "${unresolved[@]}"
-    note 'Use --check to report remaining changes. No preference permissions or management policies were overridden.'
+    [[ ${#unresolved[@]} == 0 ]] || printf '    - %s\n' "${unresolved[@]}"
+    [[ ${#deferred[@]} == 0 ]] || printf '  · Deferred by request: %s\n' "${deferred[@]}"
+    note 'Rerun Base after resolving these items; --check lists pending changes.'
     exit 3
   fi
-  note '[OK] Base setup completed. Open a new shell; preferences may require an app restart or logout.'
-  note 'Raycast permissions, application sign-in and App Store authentication remain interactive.'
+  ready 'Base setup complete'
+  if [[ ${#deferred[@]} -gt 0 ]]; then
+    printf '  · Deferred by request: %s\n' "${deferred[@]}"
+    note 'Rerun Base when ready.'
+  fi
+  note 'Open a new shell. Some settings need an app restart or logout.'
+  note 'Finish app sign-in and permissions when prompted.'
 fi

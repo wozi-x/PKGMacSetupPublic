@@ -342,9 +342,9 @@ else:
                         path.unlink()
                 output = self.run_base(code=3)
                 self.assertIn(f"{key}: {reason}", output)
-                self.assertIn("[3/4] Shell configuration", output)
-                self.assertIn("Base setup incomplete", output)
-                self.assertNotIn("[OK] Base setup completed", output)
+                self.assertIn("→ Shell configuration", output)
+                self.assertIn("Base needs attention", output)
+                self.assertNotIn("✓ Base setup complete", output)
                 if failure == "write":
                     self.assertIn("Could not write domain com.apple.finder", output)
                 state = json.loads(self.state.read_text())
@@ -409,7 +409,7 @@ else:
         self.script.write_text(source)
         output = self.run_base()
         self.assertIn("Deferred by request: App Store apps", output)
-        self.assertNotIn("Base setup incomplete", output)
+        self.assertNotIn("Base needs attention", output)
         self.assertFalse(json.loads(self.state.read_text()).get("mas"))
         self.assertFalse(any(c[0] == "brew" and any(a.endswith("/AppStore.Brewfile") for a in c[1]) for c in self.calls()))
         self.run_base("--check", code=1)
@@ -434,14 +434,14 @@ else:
         for args in ((), ("--check",)):
             output = self.run_base(*args)
             self.assertIn("Preserved existing dotfile: .tmux.conf", output)
-            self.assertIn("[OK]", output)
+            self.assertIn("✓ Base", output)
             self.assertEqual((self.home / ".tmux.conf").read_bytes(), before)
 
     def test_app_store_failure_finishes_common_setup_then_recovers(self):
         (self.root / "mas-fail").touch()
         output = self.run_base(code=3)
         self.assertIn("App Store apps remain pending", output)
-        self.assertNotIn("[OK]", output)
+        self.assertNotIn("✓ Base setup complete", output)
         state = json.loads(self.state.read_text())
         self.assertEqual(state["preferences"]["com.apple.dock show-recents"], "0")
         self.assertEqual((self.home / ".tmux.conf").read_bytes(), (ROOT / "dotfiles/.tmux.conf").read_bytes())

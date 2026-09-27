@@ -23,7 +23,7 @@ cleanup() {
     /bin/chmod "$permissions" "$candidate"
     /bin/mv -f -- "$candidate" "$target"
     candidate=''
-    printf 'Restored original .zshrc after interrupted migration.\n' >&2
+    printf '  ! Restored original .zshrc after interrupted migration.\n' >&2
   fi
   [[ -z "$candidate" ]] || /bin/rm -f -- "$candidate"
   [[ -z "$scratch" ]] || /bin/rm -rf -- "$scratch"
@@ -44,7 +44,7 @@ typeset -g _PKGMACSETUP_OMZ_LOADED=1
 # END BASE MANAGED OH MY ZSH
 ZSH
 }
-fail() { printf 'Oh My Zsh migration needs attention: %s\n' "$*" >&2; exit 1; }
+fail() { printf '  ! Oh My Zsh migration needs attention: %s\n' "$*" >&2; exit 1; }
 [[ "$HOME" == /* && -d "$HOME" && ! -L "$HOME" ]] || fail 'HOME is not a regular directory.'
 [[ -f "$target" && ! -L "$target" ]] || fail '.zshrc must be a regular file; existing links are preserved.'
 [[ "$(/usr/bin/stat -f %u "$target")" == "$(/usr/bin/id -u)" ]] || fail '.zshrc belongs to another user.'
@@ -63,7 +63,7 @@ if /usr/bin/grep -Fq -- "$begin" "$target" || /usr/bin/grep -Fq -- "$end" "$targ
 fi
 if [[ "$check" == true ]]; then
   [[ "$managed" == true ]] || fail 'startup migration is pending (no shell configuration was executed).'
-  printf 'Oh My Zsh startup block is present; runtime loading is not tested in check mode.\n'
+  printf '  · Oh My Zsh startup block present · runtime not tested in check mode\n'
   exit 0
 fi
 scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-omz.XXXXXXXX)"
@@ -86,7 +86,7 @@ if [[ "$managed" == false ]]; then
   /bin/mv -f -- "$candidate" "$target"
   installed_candidate=true
   candidate=''
-  printf 'Oh My Zsh startup backup: %s\n' "$backup"
+  printf '  · Oh My Zsh startup backup: %s\n' "$backup"
 fi
 # Run the actual startup file in a separate, non-login interactive shell.
 # No input or inherited credentials; suppress updater/compdump writes where supported.
@@ -125,4 +125,4 @@ if [[ "$valid" != true ]]; then
   fi
   fail 'fresh Zsh did not load Oh My Zsh within five seconds; existing managed file was preserved.'
 fi
-printf 'Verified Oh My Zsh in a fresh interactive Zsh session.\n'
+printf '  ✓ Verified Oh My Zsh in a fresh interactive Zsh session.\n'

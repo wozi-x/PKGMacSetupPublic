@@ -16,6 +16,11 @@ Command Line Tools dialog and Homebrew's administrator prompt. Complete a pendin
 Apple installation and rerun. Existing Homebrew is reused. Application login and
 Raycast permissions remain interactive.
 
+Setup uses compact stage headings, short readiness prompts, and a final summary
+that keeps pending actions visible. Set `NO_COLOR=1` to disable heading styling;
+redirected output and `TERM=dumb` are plain text. Existing dotfiles are reported
+once each, without repeating the preservation explanation.
+
 The default packages are git, gh, jq, docker, colima, mas, tmux, zsh-autosuggestions,
 zsh-syntax-highlighting, Raycast, Zed, 1Password and Amphetamine. Amphetamine is installed
 from the Mac App Store after common packages, preferences and shell setup finish.
