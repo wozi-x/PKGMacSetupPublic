@@ -12,6 +12,8 @@ drift=0
 preference_failures=()
 unresolved=()
 deferred=()
+# Per-invocation handoff from the shared launcher; never an account-login claim.
+onepassword_installed_now="${PKGMACSETUP_1PASSWORD_JUST_INSTALLED:-false}"
 finder=false keyboard=false trackpad=false dock=false textedit=false wallpaper=false
 general=false screenshots=false input=false dock_layout=false applications=false restart_on_freeze=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
@@ -285,8 +287,11 @@ if [[ "$check" == false && -x "$brew_bin" ]]; then
         printf '%s\n' 'cask "1password"' > "$scratch/Prerequisites.Brewfile"
         (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/Prerequisites.Brewfile" --no-upgrade) \
           || die '1Password prerequisite installation failed.'
+        onepassword_installed_now=true
       fi
-      if ! account_ready 1Password; then deferred+=('1Password sign-in'); fi
+      if [[ "$onepassword_installed_now" == true ]]; then
+        if ! account_ready 1Password; then deferred+=('1Password sign-in'); fi
+      fi
       break
     fi
   done

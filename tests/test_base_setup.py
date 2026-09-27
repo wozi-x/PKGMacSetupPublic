@@ -581,6 +581,21 @@ else:
         self.assertFalse(any(c[0] == "brew" and any(a.endswith("/AppStore.Brewfile") for a in c[1]) for c in self.calls()))
         self.run_base("--check", code=1)
 
+    def test_1password_readiness_only_follows_new_installation(self):
+        source = self.script.read_text()
+        source = re.sub(r"^account_ready\(\) \{.*?^\}",
+                        'account_ready() { printf "READY:%s\\\\n" "$1"; }', source, flags=re.M | re.S)
+        self.script.write_text(source)
+        args = self.selection('cask "1password"\n')
+        self.assertIn('READY:1Password', self.run_base(*args))
+        self.assertNotIn('READY:', self.run_base(*args))
+        self.assertNotIn('READY:', self.run_base(*args, '--check'))
+        # Simulate the shared launcher having installed the app in this run.
+        self.script.write_text(source.replace(
+            '${PKGMACSETUP_1PASSWORD_JUST_INSTALLED:-false}', 'true'))
+        self.assertIn('READY:1Password', self.run_base(*args))
+        self.assertNotIn('READY:', self.run_base(*self.selection()))
+
     def test_external_apps_and_existing_dotfiles_are_preserved(self):
         for app in ("Raycast.app", "Zed.app", "1Password.app"):
             (self.apps / app).mkdir()

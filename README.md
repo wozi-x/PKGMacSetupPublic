@@ -29,8 +29,10 @@ Macs. If sign-in or installation is unavailable, common setup finishes and Base
 reports failed App Store work as pending. Intentional skips are reported as
 deferred work and do not fail the run; --check still reports missing apps.
 When selected, 1Password is installed as a prerequisite before other packages.
-Interactive setup opens it at that point and the App Store before missing apps are
-installed. Take as long as needed, then press Return to continue; s skips the
+Interactive setup opens it only after a new installation, including when the
+shared launcher installed it in this run. Existing installations skip that pause;
+this does not verify account login. Setup opens the App Store before missing apps
+are installed. Take as long as needed, then press Return to continue; s skips the
 step and q cancels setup. Sign-in stays inside the apps. Check mode never opens
 apps or prompts, and noninteractive runs retain their existing behavior.
 
