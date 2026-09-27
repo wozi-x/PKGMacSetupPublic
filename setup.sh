@@ -168,6 +168,9 @@ safe_destination() {
   done
 }
 ohmyzsh_dir="$HOME/.oh-my-zsh"
+role_receipt="$HOME/Library/Application Support/PKGMacSetup/role"
+safe_destination "$role_receipt"
+[[ ! -e "$role_receipt" || -f "$role_receipt" ]] || die 'Setup role receipt is not a regular file; preserved.'
 safe_destination "$ohmyzsh_dir"
 if [[ -e "$ohmyzsh_dir" ]]; then
   [[ -d "$ohmyzsh_dir" && -f "$ohmyzsh_dir/oh-my-zsh.sh" && ! -L "$ohmyzsh_dir/oh-my-zsh.sh" ]] \
@@ -804,6 +807,15 @@ if [[ "$check" == true ]]; then
   ready 'Base is ready for the selected configuration.'
 else
   printf '\n'
+  # A small data-only receipt lets the shared starter report the last selected
+  # role. --check never writes it; pending accounts remain visible below.
+  safe_destination "$role_receipt"
+  mkdir -p "${role_receipt%/*}"
+  chmod 700 "${role_receipt%/*}"
+  receipt_tmp="$(mktemp "${role_receipt%/*}/.role.XXXXXX")"
+  printf 'Base\n' > "$receipt_tmp"
+  chmod 600 "$receipt_tmp"
+  mv -f "$receipt_tmp" "$role_receipt"
   if [[ ${#preference_failures[@]} -gt 0 || ${#unresolved[@]} -gt 0 ]]; then
     printf '  ! Base needs attention\n'
     if [[ ${#preference_failures[@]} -gt 0 ]]; then

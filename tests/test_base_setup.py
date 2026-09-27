@@ -320,6 +320,21 @@ else:
         self.assertEqual({str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}, dots)
         self.assertEqual(len([c for c in self.calls() if c[0] == "git"]), 1)
 
+    def test_role_receipt_is_data_only_and_check_never_creates_it(self):
+        receipt = self.home / 'Library/Application Support/PKGMacSetup/role'
+        args = self.selection()
+        self.run_base(*args, '--check', code=1)
+        self.assertFalse(receipt.exists())
+        self.run_base(*args)
+        self.assertEqual(receipt.read_text(), 'Base\n')
+        self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+        receipt.unlink()
+        receipt.symlink_to(self.root / 'unrelated')
+        before = len(self.calls())
+        self.run_base(*args, code=2)
+        self.assertFalse(any(c[0] in ('brew', 'git', 'defaults') for c in self.calls()[before:]))
+        self.assertTrue(receipt.is_symlink())
+
     def test_ohmyzsh_check_and_clone_failure_do_not_create_installation(self):
         args = self.selection()
         output = self.run_base(*args, "--check", code=1)

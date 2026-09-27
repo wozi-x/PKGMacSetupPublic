@@ -21,6 +21,12 @@ that keeps pending actions visible. Set `NO_COLOR=1` to disable heading styling;
 redirected output and `TERM=dumb` are plain text. Existing dotfiles are reported
 once each, without repeating the preservation explanation.
 
+A standard software pass records `Base` in
+`~/Library/Application Support/PKGMacSetup/role` for the shared launcher's
+read-only `--status` report. This records the selected role, not a guarantee that
+all account or permission steps completed. Check mode leaves the receipt alone;
+unsafe receipt destinations are preserved and rejected before installation.
+
 The default packages are git, gh, jq, docker, colima, mas, tmux, zsh-autosuggestions,
 zsh-syntax-highlighting, Raycast, Zed, 1Password and Amphetamine. Amphetamine is installed
 from the Mac App Store after common packages, preferences and shell setup finish.
