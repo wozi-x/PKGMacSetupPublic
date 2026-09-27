@@ -27,6 +27,11 @@ discovers, authenticates to, downloads or continues into private repositories.
 - Work on the current branch, preserve unrelated changes, and use conventional
   commits. Run Base tests, the retained legacy synthetic suite, shell syntax,
   legacy Ansible syntax and whitespace checks before committing.
+- General macOS preferences match Dev/Admin, including the default empty Dock.
+  Keep local preference-group opt-outs and read-only check mode. Remote Login
+  and SSH configuration are private-only. Coordinated changes are compared by
+  PKGMacSetup's `tests/macos-settings-parity-test.py` against this checkout's
+  fake-provider result; no private checkout is needed to install or test Base.
 
 The old Python/Ansible modules and role remain an explicit legacy implementation.
 Their authoritative code stays in module_utils with root import facades; do not

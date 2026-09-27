@@ -13,6 +13,7 @@ preference_failures=()
 unresolved=()
 deferred=()
 finder=false keyboard=false trackpad=false dock=false textedit=false wallpaper=false
+general=false screenshots=false input=false dock_layout=false applications=false restart_on_freeze=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
 die() { printf '  × Error: %s\n' "$*" >&2; exit 2; }
 note() { printf '  · %s\n' "$*"; }
@@ -137,7 +138,7 @@ fi
 seen_preferences=' '
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-  [[ "$line" =~ ^(finder|keyboard|trackpad|dock|textedit|wallpaper)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock/textedit/wallpaper=true|false.'
+  [[ "$line" =~ ^(finder|keyboard|trackpad|dock|textedit|wallpaper|general|screenshots|input|dock_layout|applications|restart_on_freeze)=(true|false)$ ]] || die 'preferences.conf accepts only documented preference groups set to true|false.'
   key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
   [[ "$seen_preferences" != *" $key "* ]] || die "Duplicate preference group: $key"
   seen_preferences+="$key "
@@ -178,6 +179,31 @@ if [[ "$keyboard" == true ]]; then
       || die 'Keyboard shortcut preferences are not a valid regular plist; preserved for repair.'
   fi
 fi
+if [[ "$finder" == true ]]; then
+  safe_destination "$HOME/Library"
+  finder_plist="$HOME/Library/Preferences/com.apple.finder.plist"
+  safe_destination "$finder_plist"
+  if [[ -e "$finder_plist" ]]; then
+    [[ -f "$finder_plist" ]] && /usr/bin/plutil -lint "$finder_plist" >/dev/null \
+      || die 'Finder preferences are not a valid regular plist; preserved for repair.'
+  fi
+fi
+for preference_group in dock input applications; do
+  [[ "${!preference_group}" == true ]] || continue
+  case "$preference_group" in
+    dock) preference_domain=com.apple.dock ;;
+    input) preference_domain=com.apple.HIToolbox ;;
+    applications) preference_domain=com.apple.messageshelper.MessageController ;;
+  esac
+  safe_destination "$HOME/Library/Preferences/$preference_domain.plist"
+  if [[ "$preference_group" == input ]]; then
+    safe_destination "$HOME/Library/Preferences/ByHost"
+    for preference_file in "$HOME/Library/Preferences/ByHost/com.apple.HIToolbox."*.plist; do
+      [[ -e "$preference_file" || -L "$preference_file" ]] || continue
+      safe_destination "$preference_file"
+    done
+  fi
+done
 [[ -d "$dot_source" && ! -L "$dot_source" ]] || die 'dotfiles must be a regular directory.'
 shopt -s nullglob dotglob
 for source_file in "$dot_source"/*; do
@@ -317,6 +343,8 @@ preference_failed() {
   if [[ "$1" == com.apple.TextEdit ]]; then
     note "TextEdit permission: allow the app running setup (Terminal, iTerm, or your editor) to access other apps' data / Full Disk Access in System Settings > Privacy & Security, then quit and reopen it."
     note 'Or set TextEdit > Settings > New Document > Plain text manually. If access is already allowed, review the write or verification error above.'
+  elif [[ "$1" == com.apple.universalaccess ]]; then
+    note 'Review System Settings > Accessibility > Display > Reduce transparency.'
   fi
 }
 preference() {
@@ -330,14 +358,14 @@ preference() {
     esac
   fi
   current="$(/usr/bin/defaults read "$domain" "$key" 2>/dev/null || true)"
-  if [[ "$current" != "$desired" ]]; then
+  if ! preference_matches "$kind" "$current" "$desired"; then
     if [[ "$check" == true ]]; then
       pending "Preference: $domain $key -> $desired"
     else
       note "Set preference: $domain $key -> $desired"
       if /usr/bin/defaults write "$domain" "$key" "-$kind" "$write_value"; then
         if current="$(/usr/bin/defaults read "$domain" "$key")"; then
-          if [[ "$current" != "$desired" ]]; then
+          if ! preference_matches "$kind" "$current" "$desired"; then
             preference_failed "$domain" "$key" 'value did not persist'
           fi
         else
@@ -350,6 +378,158 @@ preference() {
       fi
     fi
   fi
+}
+preference_matches() {
+  if [[ "$1" == int || "$1" == float ]]; then
+    [[ "$2" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || return 1
+    /usr/bin/awk -v current="$2" -v desired="$3" 'BEGIN { exit !(current + 0 == desired + 0) }'
+  else
+    [[ "$2" == "$3" ]]
+  fi
+}
+finder_views() {
+  local section key kind desired current path
+  for section in DesktopViewSettings FK_StandardViewSettings StandardViewSettings; do
+    for key in arrangeBy iconSize; do
+      kind=string desired=grid
+      [[ "$key" != iconSize ]] || { kind=integer; desired=64; }
+      path=":$section:IconViewSettings:$key"
+      current="$(/usr/libexec/PlistBuddy -c "Print $path" "$finder_plist" 2>/dev/null || true)"
+      if [[ "$key" == iconSize ]]; then
+        preference_matches int "$current" "$desired" && continue
+      else
+        [[ "$current" != "$desired" ]] || continue
+      fi
+      if [[ "$check" == true ]]; then pending "Finder: $section $key -> $desired"; continue; fi
+      /usr/libexec/PlistBuddy -c "Add :$section dict" "$finder_plist" 2>/dev/null || true
+      /usr/libexec/PlistBuddy -c "Add :$section:IconViewSettings dict" "$finder_plist" 2>/dev/null || true
+      if ! /usr/libexec/PlistBuddy -c "Set $path $desired" "$finder_plist" 2>/dev/null \
+          && ! /usr/libexec/PlistBuddy -c "Add $path $kind $desired" "$finder_plist"; then
+        preference_failed com.apple.finder "$path" 'icon view write failed'
+        continue
+      fi
+      current="$(/usr/libexec/PlistBuddy -c "Print $path" "$finder_plist" 2>/dev/null || true)"
+      if [[ "$key" == iconSize ]]; then
+        preference_matches int "$current" "$desired" \
+          || preference_failed com.apple.finder "$path" 'icon size did not persist'
+      elif [[ "$current" != "$desired" ]]; then
+        preference_failed com.apple.finder "$path" 'icon arrangement did not persist'
+      fi
+    done
+  done
+}
+show_library() {
+  local flags
+  [[ -d "$HOME/Library" ]] || return 0
+  if ! flags="$(/usr/bin/stat -f %Sf "$HOME/Library")"; then
+    pending 'Library folder visibility could not be checked.'
+    unresolved+=('Library folder visibility could not be checked.')
+    return
+  fi
+  [[ ",$flags," == *,hidden,* ]] || return 0
+  if [[ "$check" == true ]]; then pending 'Show the Library folder'; return; fi
+  if /bin/chflags nohidden "$HOME/Library" \
+      && flags="$(/usr/bin/stat -f %Sf "$HOME/Library")" && [[ ",$flags," != *,hidden,* ]]; then
+    ready 'Library folder is visible'
+  else
+    preference_failed com.apple.finder Library 'could not make Library visible'
+  fi
+}
+input_source_present() {
+  local key="$1" kind="$2"
+  { /usr/bin/defaults read com.apple.HIToolbox "$key" 2>/dev/null || true
+    /usr/bin/defaults -currentHost read com.apple.HIToolbox "$key" 2>/dev/null || true
+  } | /usr/bin/awk -v kind="$kind" '
+    BEGIN { found = 0; RS = "}"; }
+    /"Bundle ID" = "com.apple.inputmethod.SCIM"/ {
+      if (kind == "keyboard" && /InputSourceKind = "Keyboard Input Method"/) found = 1;
+      if (kind == "pinyin" && /"Input Mode" = "com.apple.inputmethod.SCIM.ITABC"/) found = 1;
+    }
+    END { exit(found ? 0 : 1); }'
+}
+pinyin_sources() {
+  local key kind entry
+  for key in AppleEnabledInputSources AppleSelectedInputSources; do
+    for kind in keyboard pinyin; do
+      input_source_present "$key" "$kind" && continue
+      if [[ "$check" == true ]]; then pending "Pinyin: $key $kind"; continue; fi
+      if [[ "$key" == AppleSelectedInputSources ]] \
+          && ! /usr/bin/defaults read com.apple.HIToolbox "$key" >/dev/null 2>&1 \
+          && ! /usr/bin/defaults -currentHost read com.apple.HIToolbox "$key" >/dev/null 2>&1; then
+        /usr/bin/defaults write com.apple.HIToolbox "$key" -array-add \
+          '{ InputSourceKind = "Keyboard Layout"; "KeyboardLayout ID" = 252; "KeyboardLayout Name" = "ABC"; }' \
+          || preference_failed com.apple.HIToolbox "$key" 'initial ABC input source write failed'
+      fi
+      if [[ "$kind" == keyboard ]]; then
+        entry='{ InputSourceKind = "Keyboard Input Method"; "Bundle ID" = "com.apple.inputmethod.SCIM"; }'
+      else
+        entry='{ InputSourceKind = "Input Mode"; "Bundle ID" = "com.apple.inputmethod.SCIM"; "Input Mode" = "com.apple.inputmethod.SCIM.ITABC"; }'
+      fi
+      if ! /usr/bin/defaults write com.apple.HIToolbox "$key" -array-add "$entry"; then
+        preference_failed com.apple.HIToolbox "$key" 'Pinyin input source write failed'
+      elif ! input_source_present "$key" "$kind"; then
+        # Match the Dev/Admin fallback for preferences resolved from ByHost.
+        if ! /usr/bin/defaults -currentHost write com.apple.HIToolbox "$key" -array-add "$entry" \
+            || ! input_source_present "$key" "$kind"; then
+          preference_failed com.apple.HIToolbox "$key" 'Pinyin input source did not persist'
+        fi
+      fi
+    done
+  done
+}
+clear_dock_layout() {
+  local key snapshot current
+  for key in persistent-apps persistent-others; do
+    snapshot="$(/usr/bin/defaults export com.apple.dock - 2>/dev/null)" || {
+      pending 'Dock layout could not be inspected.'
+      unresolved+=('Dock layout could not be inspected; existing icons were preserved.')
+      return
+    }
+    # An absent key is already empty. Preserve any other Dock preference.
+    current="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract "$key" json -o - - 2>/dev/null || true)"
+    [[ -n "$current" && "$current" != '[]' ]] || continue
+    if [[ "$check" == true ]]; then pending "Clear Dock icons: $key"; continue; fi
+    note "Clear Dock icons: $key"
+    if ! /usr/bin/defaults write com.apple.dock "$key" -array; then
+      preference_failed com.apple.dock "$key" 'Dock icon removal failed'
+      continue
+    fi
+    snapshot="$(/usr/bin/defaults export com.apple.dock - 2>/dev/null || true)"
+    current="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract "$key" json -o - - 2>/dev/null || true)"
+    [[ "$current" == '[]' ]] || preference_failed com.apple.dock "$key" 'Dock icon removal did not persist'
+  done
+}
+messages_preferences() {
+  local key snapshot current
+  for key in automaticQuoteSubstitutionEnabled continuousSpellCheckingEnabled; do
+    snapshot="$(/usr/bin/defaults export com.apple.messageshelper.MessageController - 2>/dev/null || true)"
+    current="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract "SOInputLineSettings.$key" raw -o - - 2>/dev/null || true)"
+    [[ "$current" != false && "$current" != 0 ]] || continue
+    if [[ "$check" == true ]]; then pending "Messages: $key -> false"; continue; fi
+    if ! /usr/bin/defaults write com.apple.messageshelper.MessageController SOInputLineSettings -dict-add "$key" '<false/>'; then
+      preference_failed com.apple.messageshelper.MessageController "$key" 'Messages preference write failed'
+      continue
+    fi
+    snapshot="$(/usr/bin/defaults export com.apple.messageshelper.MessageController - 2>/dev/null || true)"
+    current="$(printf '%s' "$snapshot" | /usr/bin/plutil -extract "SOInputLineSettings.$key" raw -o - - 2>/dev/null || true)"
+    [[ "$current" == false || "$current" == 0 ]] \
+      || preference_failed com.apple.messageshelper.MessageController "$key" 'Messages preference did not persist'
+  done
+}
+restart_freeze_setting() {
+  local current
+  current="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -getrestartfreeze 2>/dev/null || true)"
+  [[ "$current" != 'Restart After Freeze: On' ]] || return 0
+  if [[ "$check" == true ]]; then
+    pending 'Restart after freeze: enable or verify with administrator access'
+    return
+  fi
+  note 'Enable restart after freeze · administrator approval may be required'
+  if clean_run /usr/bin/sudo /usr/sbin/systemsetup -setrestartfreeze on; then
+    current="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -getrestartfreeze 2>/dev/null || true)"
+  fi
+  [[ "$current" == 'Restart After Freeze: On' ]] \
+    || preference_failed systemsetup restartfreeze 'restart after freeze could not be enabled or verified'
 }
 # Only these two fixed shortcuts are managed; dict-add preserves other hotkeys.
 hotkey_matches() {
@@ -406,6 +586,30 @@ if [[ "$finder" == true ]]; then
   preference com.apple.finder ShowStatusBar bool 1
   preference com.apple.finder FXPreferredViewStyle string clmv
   preference com.apple.finder FXDefaultSearchScope string SCcf
+  preference com.apple.finder NewWindowTarget string PfDe
+  preference com.apple.finder ShowHardDrivesOnDesktop bool 1
+  preference com.apple.finder ShowExternalHardDrivesOnDesktop bool 1
+  preference com.apple.finder ShowMountedServersOnDesktop bool 1
+  preference com.apple.finder ShowRemovableMediaOnDesktop bool 1
+  preference com.apple.finder QLEnableTextSelection bool 1
+  preference com.apple.finder _FXShowPosixPathInTitle bool 1
+  preference com.apple.finder FXEnableExtensionChangeWarning bool 0
+  preference NSGlobalDomain com.apple.springing.enabled bool 1
+  preference NSGlobalDomain com.apple.springing.delay float 0.1
+  preference com.apple.desktopservices DSDontWriteNetworkStores bool 1
+  finder_views
+  show_library
+fi
+if [[ "$general" == true ]]; then
+  preference NSGlobalDomain NSNavPanelExpandedStateForSaveMode bool 1
+  preference NSGlobalDomain PMPrintingExpandedStateForPrint bool 1
+  preference NSGlobalDomain NSDocumentSaveNewDocumentsToCloud bool 0
+  preference com.apple.print.PrintingPrefs 'Quit When Finished' bool 1
+fi
+if [[ "$screenshots" == true ]]; then
+  preference com.apple.screencapture location string "$HOME/Downloads"
+  preference com.apple.screencapture type string png
+  preference com.apple.screencapture disable-shadow bool 1
 fi
 if [[ "$keyboard" == true ]]; then
   preference NSGlobalDomain KeyRepeat int 2
@@ -415,6 +619,10 @@ if [[ "$keyboard" == true ]]; then
   preference NSGlobalDomain NSAutomaticDashSubstitutionEnabled bool 0
   preference NSGlobalDomain NSAutomaticSpellingCorrectionEnabled bool 0
   keyboard_shortcuts
+fi
+if [[ "$input" == true ]]; then
+  pinyin_sources
+  preference com.apple.TextInputMenu visible bool 1
 fi
 if [[ "$trackpad" == true ]]; then
   for domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
@@ -428,7 +636,21 @@ if [[ "$dock" == true ]]; then
   preference com.apple.dock autohide bool 1
   preference com.apple.dock tilesize int 48
   preference com.apple.dock show-recents bool 0
+  preference com.apple.dock expose-animation-duration float 0.15
+  preference com.apple.dock showhidden bool 1
+  preference com.apple.universalaccess reduceTransparency bool 1
+  preference com.apple.dock wvous-br-corner int 2
+  preference com.apple.dock wvous-tr-corner int 10
+  preference com.apple.dock wvous-bl-corner int 4
+  [[ "$dock_layout" == false ]] || clear_dock_layout
 fi
+if [[ "$applications" == true ]]; then
+  preference com.apple.appstore InAppReviewEnabled int 0
+  preference com.apple.ActivityMonitor OpenMainWindow bool 1
+  preference com.apple.ActivityMonitor ShowCategory int 0
+  messages_preferences
+fi
+[[ "$restart_on_freeze" == false ]] || restart_freeze_setting
 if [[ "$textedit" == true ]]; then
   textedit_preferences="$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Preferences"
   # Probe existing containers without printing file names or changing access.

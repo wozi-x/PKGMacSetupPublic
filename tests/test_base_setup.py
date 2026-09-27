@@ -45,7 +45,58 @@ if kind == "uname":
 elif kind == "id":
     print("fixture" if args == ["-un"] else "501")
 elif kind == "stat":
-    print("501" if args[1] == "%u" else oct(os.stat(args[2]).st_mode & 0o777)[2:])
+    if args[1] == "%Sf":
+        print("hidden" if state.get("library_hidden") else "-")
+    else:
+        print("501" if args[1] == "%u" else oct(os.stat(args[2]).st_mode & 0o777)[2:])
+elif kind == "chflags":
+    assert args[0] == "nohidden"
+    assert pathlib.Path(args[1]).resolve() == root / "home with spaces/Library"
+    state["library_hidden"] = False
+    state_file.write_text(json.dumps(state))
+elif kind == "sudo":
+    assert not os.environ.get("AWS_ACCESS_KEY_ID")
+    if args[0] == "-n":
+        args = args[1:]
+    assert args[0] == "/usr/sbin/systemsetup"
+    if state.get("systemsetup_failure"):
+        sys.exit(1)
+    if args[1:] == ["-getrestartfreeze"]:
+        print("Restart After Freeze: " + ("On" if state.get("restartfreeze") else "Off"))
+    else:
+        assert args[1:] == ["-setrestartfreeze", "on"]
+        state["restartfreeze"] = True
+        state_file.write_text(json.dumps(state))
+elif kind == "PlistBuddy":
+    assert args[0] == "-c"
+    assert pathlib.Path(args[2]).resolve() == root / "home with spaces/Library/Preferences/com.apple.finder.plist"
+    command = args[1].split()
+    path = command[1].strip(":").split(":")
+    tree = state.setdefault("finder_views", {})
+    for component in path[:-1]:
+        if component not in tree:
+            sys.exit(1)
+        tree = tree[component]
+    key = path[-1]
+    if command[0] == "Print":
+        if key not in tree:
+            sys.exit(1)
+        value = tree[key]
+        print(f"{value:.6f}" if isinstance(value, int) else value)
+    else:
+        if state.get("finder_view_failure"):
+            sys.exit(1)
+        if command[0] == "Set":
+            if key not in tree:
+                sys.exit(1)
+            value = command[2]
+        else:
+            assert command[0] == "Add"
+            if key in tree:
+                sys.exit(1)
+            value = {} if command[2] == "dict" else command[3]
+        tree[key] = int(value) if key == "iconSize" else value
+        state_file.write_text(json.dumps(state))
 elif kind == "brew":
     if args[:2] == ["list", "--formula"]:
         print("\n".join(state["formulae"]))
@@ -92,7 +143,19 @@ elif kind == "mas":
     for app_id, name in state.get("mas", {}).items():
         print(app_id.rjust(10) + "  " + name + " (1.0)")
 elif kind == "defaults":
+    current_host = args[0] == "-currentHost"
+    if current_host:
+        args = args[1:]
     if args[0] == "export":
+        if args[1] != "com.apple.symbolichotkeys":
+            domain = args[1]
+            if domain in state.get("export_failures", []):
+                sys.exit(1)
+            values = {key[len(domain) + 1:]: value for key, value in state["preferences"].items()
+                      if key.startswith(domain + " ")}
+            values.update(state.get("domains", {}).get(domain, {}))
+            print(plistlib.dumps(values).decode())
+            sys.exit(0)
         hotkeys = state.get("hotkeys", {})
         if state.get("hotkey_reads_remaining", 0):
             hotkeys = state.get("previous_hotkeys", {})
@@ -103,6 +166,35 @@ elif kind == "defaults":
                 if isinstance(shortcut.get("enabled"), bool):
                     shortcut["enabled"] = int(shortcut["enabled"])
         print(plistlib.dumps({"AppleSymbolicHotKeys": hotkeys}).decode())
+        sys.exit(0)
+    if args[1] == "com.apple.HIToolbox":
+        key = ("host:" if current_host else "") + args[2]
+        sources = state.setdefault("input_sources", {})
+        if args[0] == "read":
+            if key not in sources or (not current_host and state.get("input_requires_byhost")):
+                sys.exit(1)
+            print("(\n" + ",\n".join(sources[key]) + "\n)")
+        else:
+            assert args[0] == "write" and args[3] == "-array-add"
+            if state.get("input_failure") == "write":
+                sys.exit(1)
+            if state.get("input_failure") != "persist":
+                sources.setdefault(key, []).append(args[4])
+                state_file.write_text(json.dumps(state))
+        sys.exit(0)
+    if args[0] == "write" and args[3] in ("-array", "-dict-add") and args[1] != "com.apple.symbolichotkeys":
+        failure = state.get("preference_failures", {}).get(args[1] + " " + args[2])
+        if failure == "write":
+            sys.exit(255)
+        if failure != "persist":
+            values = state.setdefault("domains", {}).setdefault(args[1], {})
+            if args[3] == "-array":
+                assert len(args) == 4
+                values[args[2]] = []
+            else:
+                assert len(args) == 6
+                values.setdefault(args[2], {})[args[4]] = plistlib.loads(("<plist>" + args[5] + "</plist>").encode())
+            state_file.write_text(json.dumps(state))
         sys.exit(0)
     if args[0] == "write" and args[3] == "-dict-add":
         if state.get("hotkey_failure") == "write":
@@ -171,12 +263,14 @@ else:
 '''
         )
         self.provider.chmod(0o755)
-        for name in ("brew", "git", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift"):
+        for name in ("brew", "git", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift", "sudo", "chflags", "PlistBuddy"):
             (self.bin / name).symlink_to(self.provider)
         self.script = self.root / "setup.sh"
         source = (ROOT / "setup.sh").read_text()
-        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift"):
+        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift", "sudo"):
             source = source.replace(f"/usr/bin/{name}", str(self.bin / name))
+        source = source.replace("/bin/chflags", str(self.bin / "chflags"))
+        source = source.replace("/usr/libexec/PlistBuddy", str(self.bin / "PlistBuddy"))
         source = source.replace("/opt/homebrew/bin/brew", str(self.bin / "brew"))
         source = source.replace("/usr/local/bin/brew", str(self.bin / "brew"))
         source = source.replace('"/Applications/', f'"{self.apps}/')

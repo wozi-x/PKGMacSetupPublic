@@ -68,7 +68,7 @@ The runner never searches for, downloads or publishes your local configuration.
 | File | Meaning |
 | --- | --- |
 | Brewfile | Complete replacement for the default package list; missing file uses the default. |
-| preferences.conf | Only finder, keyboard, trackpad, dock, textedit and wallpaper, each set to true or false. Omitted groups preserve existing settings. Missing file uses public preferences. |
+| preferences.conf | The preference groups listed below, each set to true or false. Omitted groups preserve existing settings. Missing file uses public preferences. |
 | dotfiles/.zprofile, .zshrc, .tmux.conf, .gitconfig | Optional explicitly selected fragments. Only these filenames are accepted. |
 
 The default `textedit=true` makes new TextEdit documents plain text. If macOS
@@ -158,17 +158,40 @@ vi selection keys, h/j/k/l pane navigation, and current-directory splits.
 
 ## Preferences and repeat behavior
 
-The enabled default groups set:
+Base, Dev and Admin share the following default macOS settings. Base's public
+runner remains independent and never enables Remote Login or configures SSH.
+All groups below are enabled in the default `preferences.conf`:
 
-- Finder: extensions, path/status bars, column view and current-folder search.
-- Keyboard: repeat rate 2, initial delay 15, ordinary key repeat, and disabled
+- `general`: expanded save/print panels, new documents saved locally, and printer
+  apps closed after printing.
+- `screenshots`: Downloads folder, PNG format and no window shadow.
+- `finder`: extensions, path/status bars, column view, current-folder search,
+  new windows at Desktop, drives and servers on Desktop, Quick Look text selection,
+  full paths in titles, no extension-change warning, spring loading with a 0.1-second
+  delay, no network `.DS_Store` files, visible Library, and 64-pixel icons snapped
+  to a grid in Desktop, file dialogs and standard icon views.
+- `keyboard`: repeat rate 2, initial delay 15, ordinary key repeat, and disabled
   smart quotes, dashes and auto-correction. Command-Space selects the next input
   source; the conflicting Spotlight shortcut is disabled. Other shortcuts are
   preserved. Log out and back in if macOS has not yet picked up the shortcut.
-- Trackpad: tap to click, two-finger right-click, three-finger drag and light click.
-- Dock: autohide, size 48 and no recent-app section.
-- Wallpaper: the built-in solid Stone image, matching the Dev and Admin setup
-  default. Set `wallpaper=false` in a local `preferences.conf` to preserve it.
+- `input`: adds Simplified Chinese Pinyin to enabled/selected input sources and
+  shows the input menu. Existing input sources are preserved.
+- `trackpad`: tap to click, two-finger right-click, three-finger drag and light click.
+- `dock`: autohide, size 48, no recent apps, 0.15-second Mission Control animations,
+  translucent hidden-app icons, reduced transparency, and hot corners:
+  bottom-right Mission Control, top-right display sleep, bottom-left Desktop.
+- `dock_layout`: clears pinned application and folder icons when `dock=true`,
+  matching the Dev/Admin default empty Dock. Finder and Trash remain system-owned.
+  Set `dock_layout=false` to keep your layout while applying other Dock settings.
+- `textedit`: plain text for new documents.
+- `applications`: disables App Store review requests and Messages smart quotes/
+  spell checking; Activity Monitor opens its main window and shows all processes.
+- `restart_on_freeze`: enables automatic restart after a freeze using the fixed
+  `systemsetup` operation. Administrator approval may be needed; unsupported or
+  denied operations remain in the incomplete-setup summary. Check mode only tries
+  a noninteractive status read and reports pending when it cannot verify the setting.
+- `wallpaper`: the built-in solid Stone image. Set `wallpaper=false` in a local
+  `preferences.conf` to preserve it.
 
 Wallpaper uses AppKit for the logged-in console user's current desktop on each
 accessible display. It skips when no graphical display is accessible or the
@@ -176,10 +199,10 @@ setup user is not the console user; inactive Spaces are not guaranteed to change
 `--check` reports wallpaper drift without changing it. Image, API or verification
 failures remain in the final incomplete-setup summary while other setup continues.
 
-False groups preserve existing values. Preferences are compared before writing.
-No Dock icons are cleared, applications killed, Remote Login enabled, Mac name
-changed or security permissions overridden. A logout or later app restart may
-be needed for macOS to display some changes.
+False or omitted local groups preserve existing values. Preferences are compared
+before writing. Base does not kill applications, change the Mac name, override
+security permissions, enable Remote Login or edit SSH configuration. Log out and
+back in for Finder, Dock and input-source changes to appear if they are cached.
 
 A failed preference write or read-back verification is reported with its domain
 and key. Base continues with the remaining preferences and shell configuration,
