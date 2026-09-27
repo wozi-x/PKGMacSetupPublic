@@ -12,7 +12,7 @@ drift=0
 preference_failures=()
 unresolved=()
 deferred=()
-finder=false keyboard=false trackpad=false dock=false textedit=false
+finder=false keyboard=false trackpad=false dock=false textedit=false wallpaper=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
 die() { printf '  × Error: %s\n' "$*" >&2; exit 2; }
 note() { printf '  · %s\n' "$*"; }
@@ -137,7 +137,7 @@ fi
 seen_preferences=' '
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-  [[ "$line" =~ ^(finder|keyboard|trackpad|dock|textedit)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock/textedit=true|false.'
+  [[ "$line" =~ ^(finder|keyboard|trackpad|dock|textedit|wallpaper)=(true|false)$ ]] || die 'preferences.conf accepts only finder/keyboard/trackpad/dock/textedit/wallpaper=true|false.'
   key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
   [[ "$seen_preferences" != *" $key "* ]] || die "Duplicate preference group: $key"
   seen_preferences+="$key "
@@ -293,6 +293,24 @@ if [[ -x "$brew_bin" ]]; then
   fi
 fi
 heading 'macOS settings'
+if [[ "$wallpaper" == true ]]; then
+  wallpaper_mode=--apply
+  [[ "$check" == false ]] || wallpaper_mode=--check
+  if wallpaper_result="$(clean_run /usr/bin/swift "$base_dir/set-desktop-wallpaper.swift" \
+      '/System/Library/Desktop Pictures/Solid Colors/Stone.png' "$wallpaper_mode")"; then
+    case "$wallpaper_result" in
+      'wallpaper: unchanged') ;;
+      'wallpaper: would-change ('*) pending 'Desktop wallpaper: Stone' ;;
+      'wallpaper: changed ('*) ready 'Desktop wallpaper: Stone' ;;
+      'wallpaper: skipped ('*) note "$wallpaper_result" ;;
+      *) pending 'Desktop wallpaper could not be verified.'
+         unresolved+=('Desktop wallpaper returned an unexpected result; rerun Base.') ;;
+    esac
+  else
+    pending 'Desktop wallpaper could not be applied or verified.'
+    unresolved+=('Desktop wallpaper failed; review the error above, then rerun Base.')
+  fi
+fi
 preference_failed() {
   preference_failures+=("$1 $2: $3")
   printf '  ! Warning: preference not applied: %s %s\n    %s. Continuing setup.\n' "$1" "$2" "$3" >&2

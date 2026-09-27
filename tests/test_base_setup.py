@@ -146,23 +146,43 @@ elif kind == "curl":
     print(json.dumps({"artifacts": [{"app": ["External.app"]}]}))
 elif kind == "xcode-select":
     sys.exit(1 if args == ["-p"] else 0)
+elif kind == "swift":
+    assert len(args) == 3
+    assert pathlib.Path(args[0]) == root / "set-desktop-wallpaper.swift"
+    assert pathlib.Path(args[0]).is_file()
+    assert args[1] == "/System/Library/Desktop Pictures/Solid Colors/Stone.png"
+    assert args[2] in ("--check", "--apply")
+    assert not os.environ.get("AWS_ACCESS_KEY_ID")
+    if state.get("wallpaper_failure"):
+        print("wallpaper: desktop image verification failed", file=sys.stderr)
+        sys.exit(1)
+    if state.get("wallpaper_skip"):
+        print("wallpaper: skipped (" + state["wallpaper_skip"] + ")")
+    elif state.get("wallpaper") == args[1]:
+        print("wallpaper: unchanged")
+    elif args[2] == "--check":
+        print("wallpaper: would-change (2 display(s))")
+    else:
+        state["wallpaper"] = args[1]
+        state_file.write_text(json.dumps(state))
+        print("wallpaper: changed (2 display(s))")
 else:
     raise AssertionError((kind, args))
 '''
         )
         self.provider.chmod(0o755)
-        for name in ("brew", "git", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
+        for name in ("brew", "git", "mas", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift"):
             (self.bin / name).symlink_to(self.provider)
         self.script = self.root / "setup.sh"
         source = (ROOT / "setup.sh").read_text()
-        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select"):
+        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift"):
             source = source.replace(f"/usr/bin/{name}", str(self.bin / name))
         source = source.replace("/opt/homebrew/bin/brew", str(self.bin / "brew"))
         source = source.replace("/usr/local/bin/brew", str(self.bin / "brew"))
         source = source.replace('"/Applications/', f'"{self.apps}/')
         self.script.write_text(source)
         self.script.chmod(0o755)
-        for name in ("Brewfile", "preferences.conf", "migrate-ohmyzsh.sh"):
+        for name in ("Brewfile", "preferences.conf", "migrate-ohmyzsh.sh", "set-desktop-wallpaper.swift"):
             shutil.copyfile(ROOT / name, self.root / name)
         shutil.copytree(ROOT / "dotfiles", self.root / "dotfiles")
 
@@ -189,6 +209,7 @@ else:
         self.assertTrue(any(a.endswith("/Prerequisites.Brewfile") for a in bundles[0]))
         installed = json.loads(self.state.read_text())
         self.assertIn("mas", installed["formulae"])
+        self.assertEqual(installed["wallpaper"], "/System/Library/Desktop Pictures/Solid Colors/Stone.png")
         self.assertEqual(installed["mas"], {"937984704": "Amphetamine"})
         state = self.state.read_bytes()
         dots = {str(p.relative_to(self.home)): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
@@ -256,6 +277,58 @@ else:
         self.assertEqual(self.state.read_bytes(), original)
         self.assertEqual(list(self.home.iterdir()), [])
         self.assertFalse(any(c[0] == "defaults" and c[1][0] == "write" for c in self.calls()))
+
+    def test_wallpaper_check_apply_and_rerun(self):
+        # Satisfy everything else first so --check's exit code proves wallpaper drift.
+        self.run_base(*self.selection())
+        args = self.selection(prefs="wallpaper=true\n")
+        original = self.state.read_bytes()
+        output = self.run_base(*args, "--check", code=1)
+        self.assertIn("Pending: Desktop wallpaper: Stone", output)
+        self.assertEqual(self.state.read_bytes(), original)
+        self.assertIn("Desktop wallpaper: Stone", self.run_base(*args))
+        applied = self.state.read_bytes()
+        self.assertNotIn("Desktop wallpaper: Stone", self.run_base(*args))
+        self.run_base(*args, "--check")
+        self.assertEqual(self.state.read_bytes(), applied)
+        self.assertEqual([c[1][-1] for c in self.calls() if c[0] == "swift"],
+                         ["--check", "--apply", "--apply", "--check"])
+
+    def test_disabled_or_omitted_wallpaper_preserves_existing_image(self):
+        state = json.loads(self.state.read_text())
+        state["wallpaper"] = "/custom/image.png"
+        self.state.write_text(json.dumps(state))
+        for prefs in ("", "wallpaper=false\n"):
+            args = self.selection(prefs=prefs)
+            self.run_base(*args)
+            self.run_base(*args, "--check")
+        self.assertFalse(any(c[0] == "swift" for c in self.calls()))
+        self.assertEqual(json.loads(self.state.read_text())["wallpaper"], "/custom/image.png")
+
+    def test_wallpaper_session_skips_are_reported_without_changes(self):
+        args = self.selection(prefs="wallpaper=true\n")
+        for reason in ("run as the logged-in console user", "no accessible graphical display"):
+            state = json.loads(self.state.read_text())
+            state["wallpaper_skip"] = reason
+            self.state.write_text(json.dumps(state))
+            for extra in ((), ("--check",)):
+                self.assertIn("wallpaper: skipped (" + reason + ")", self.run_base(*args, *extra))
+                self.assertNotIn("wallpaper", json.loads(self.state.read_text()))
+
+    def test_wallpaper_failure_is_retained_after_other_setup_finishes(self):
+        state = json.loads(self.state.read_text())
+        state["wallpaper_failure"] = True
+        self.state.write_text(json.dumps(state))
+        args = self.selection(prefs="wallpaper=true\nfinder=true\n")
+        output = self.run_base(*args, code=3)
+        self.assertIn("desktop image verification failed", output)
+        self.assertIn("Base needs attention", output)
+        self.assertIn("Desktop wallpaper failed; review the error above", output)
+        self.assertTrue((self.home / ".zshrc").is_file())
+        self.assertEqual(json.loads(self.state.read_text())["preferences"]["com.apple.finder ShowPathbar"], "1")
+        original = self.state.read_bytes()
+        self.assertIn("Desktop wallpaper could not be applied or verified", self.run_base(*args, "--check", code=1))
+        self.assertEqual(self.state.read_bytes(), original)
 
     def test_keyboard_shortcuts_preserve_other_keys_and_detect_drift(self):
         args = self.selection(prefs="keyboard=true\n")
