@@ -19,7 +19,9 @@ Raycast permissions remain interactive.
 Setup uses compact stage headings, short readiness prompts, and a final summary
 that keeps pending actions visible. Set `NO_COLOR=1` to disable heading styling;
 redirected output and `TERM=dumb` are plain text. Existing dotfiles are reported
-once each, without repeating the preservation explanation.
+once each, without repeating the preservation explanation. Package output is
+indented beneath its stage, and long messages wrap to the terminal width with
+aligned continuation lines. Long path tokens remain intact.
 
 A standard software pass records `Base` in
 `~/Library/Application Support/PKGMacSetup/role` for the shared launcher's

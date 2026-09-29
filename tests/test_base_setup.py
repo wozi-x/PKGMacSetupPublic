@@ -52,10 +52,15 @@ elif kind == "stat":
 elif kind == "chflags":
     assert args[0] == "nohidden"
     assert pathlib.Path(args[1]).resolve() == root / "home with spaces/Library"
+    if state.get("chflags_failure"):
+        print("chflags: permission denied", file=sys.stderr)
+        sys.exit(1)
     state["library_hidden"] = False
     state_file.write_text(json.dumps(state))
 elif kind == "sudo":
     assert not os.environ.get("AWS_ACCESS_KEY_ID")
+    if args[:2] == ["-v", "-p"]:
+        sys.exit(1 if state.get("sudo_denied") else 0)
     if args[0] == "-n":
         args = args[1:]
     assert args[0] == "/usr/sbin/systemsetup"
@@ -65,7 +70,10 @@ elif kind == "sudo":
         print("Restart After Freeze: " + ("On" if state.get("restartfreeze") else "Off"))
     else:
         assert args[1:] == ["-setrestartfreeze", "on"]
-        state["restartfreeze"] = True
+        if state.get("systemsetup_diagnostic"):
+            print(state["systemsetup_diagnostic"], file=sys.stderr)
+        if not state.get("systemsetup_no_change"):
+            state["restartfreeze"] = True
         state_file.write_text(json.dumps(state))
 elif kind == "PlistBuddy":
     assert args[0] == "-c"
@@ -107,6 +115,8 @@ elif kind == "brew":
         assert os.environ["HOMEBREW_NO_INSTALL_CLEANUP"] == "1"
         assert os.environ["HOMEBREW_NO_AUTO_UPDATE"] == "1"
         assert not os.environ.get("AWS_ACCESS_KEY_ID")
+        if state.get("brew_output"):
+            print(state["brew_output"], flush=True)
         if (root / "bundle-fail").exists():
             sys.exit(4)
         brewfile = pathlib.Path(next(a[7:] for a in args if a.startswith("--file=")))
@@ -267,9 +277,8 @@ else:
             (self.bin / name).symlink_to(self.provider)
         self.script = self.root / "setup.sh"
         source = (ROOT / "setup.sh").read_text()
-        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift", "sudo"):
+        for name in ("git", "defaults", "uname", "id", "stat", "curl", "xcode-select", "swift", "sudo", "chflags"):
             source = source.replace(f"/usr/bin/{name}", str(self.bin / name))
-        source = source.replace("/bin/chflags", str(self.bin / "chflags"))
         source = source.replace("/usr/libexec/PlistBuddy", str(self.bin / "PlistBuddy"))
         source = source.replace("/opt/homebrew/bin/brew", str(self.bin / "brew"))
         source = source.replace("/usr/local/bin/brew", str(self.bin / "brew"))
@@ -733,8 +742,12 @@ else:
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_package_failure_stops_preferences_and_dotfiles(self):
+        state = json.loads(self.state.read_text())
+        state["brew_output"] = "Using git\nError: fixture package download failed"
+        self.state.write_text(json.dumps(state))
         (self.root / "bundle-fail").touch()
-        self.run_base(code=2)
+        output = self.run_base(code=2)
+        self.assertIn("    Using git\n    Error: fixture package download failed", output)
         self.assertFalse(any(c[0] == "defaults" for c in self.calls()))
         self.assertEqual(list(self.home.iterdir()), [])
 

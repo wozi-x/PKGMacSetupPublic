@@ -17,9 +17,60 @@ onepassword_installed_now="${PKGMACSETUP_1PASSWORD_JUST_INSTALLED:-false}"
 finder=false keyboard=false trackpad=false dock=false textedit=false wallpaper=false
 general=false screenshots=false input=false dock_layout=false applications=false restart_on_freeze=false
 formulae=() casks=() mas_ids=() dotfiles=() declarations=() mas_declarations=()
-die() { printf '  × Error: %s\n' "$*" >&2; exit 2; }
-note() { printf '  · %s\n' "$*"; }
-ready() { printf '  ✓ %s\n' "$*"; }
+format_output() {
+  local columns="${COLUMNS:-80}" terminal_size
+  # Preserve the terminal before command substitution redirects stdout.
+  if [[ -t 1 ]] && { terminal_size="$(/bin/stty size <&3 2>/dev/null)"; } 3>&1; then
+    columns="${terminal_size##* }"
+  fi
+  [[ "$columns" =~ ^[1-9][0-9]*$ ]] || columns=80
+  /usr/bin/awk -v width="$columns" '
+    BEGIN { width = width < 24 ? 24 : (width > 96 ? 96 : width) }
+    {
+      text = $0
+      sub(/\r$/, "", text)
+      prefix = "    "
+      indent = prefix
+      if (match(text, /^ +/)) {
+        prefix = substr(text, 1, RLENGTH)
+        text = substr(text, RLENGTH + 1)
+        indent = prefix
+        if (match(text, /^(→|·|✓|!|×|-) /)) {
+          prefix = prefix substr(text, 1, RLENGTH)
+          text = substr(text, RLENGTH + 1)
+          indent = indent "  "
+          if (match(text, /^(Warning|Error): /)) {
+            prefix = prefix substr(text, 1, RLENGTH)
+            indent = indent sprintf("%*s", RLENGTH, "")
+            text = substr(text, RLENGTH + 1)
+          }
+        }
+      }
+      count = split(text, words, /[[:space:]]+/)
+      line = prefix
+      has_word = 0
+      for (i = 1; i <= count; i++) {
+        if (words[i] == "") continue
+        if (has_word && length(line) + length(words[i]) + 1 > width) {
+          print line
+          line = indent
+          has_word = 0
+        }
+        line = line (has_word ? " " : "") words[i]
+        has_word = 1
+      }
+      if (has_word) print line
+      else print ""
+      fflush()
+    }
+  '
+}
+# Format only displayed output, never data consumed by inventory checks.
+# pipefail retains the provider status; stdin remains attached for prompts.
+run_visible() { "$@" 2>&1 | format_output; }
+die() { printf '  × Error: %s\n' "$*" | format_output >&2; exit 2; }
+note() { printf '  · %s\n' "$*" | format_output; }
+ready() { printf '  ✓ %s\n' "$*" | format_output; }
 heading() {
   if [[ -t 1 && "${TERM:-}" != dumb && -z "${NO_COLOR+x}" ]]; then
     printf '\n  \033[1m→ %s\033[0m\n' "$1"
@@ -288,7 +339,7 @@ if [[ "$check" == false && -x "$brew_bin" ]]; then
       if ! clean_run "$brew_bin" list --cask -1 | /usr/bin/grep -Fxq 1password && ! external_app 1password; then
         [[ -n "$scratch" ]] || scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
         printf '%s\n' 'cask "1password"' > "$scratch/Prerequisites.Brewfile"
-        (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/Prerequisites.Brewfile" --no-upgrade) \
+        (cd -- "$scratch" && run_visible clean_run "$brew_bin" bundle install --file="$scratch/Prerequisites.Brewfile" --no-upgrade) \
           || die '1Password prerequisite installation failed.'
         onepassword_installed_now=true
       fi
@@ -321,7 +372,7 @@ if [[ -x "$brew_bin" ]]; then
     printf '%s\n' ${declarations+"${declarations[@]}"} > "$scratch/Brewfile"
     (
       cd -- "$scratch"
-      clean_run /usr/bin/env HOMEBREW_BUNDLE_CASK_SKIP="$skip_casks" \
+      run_visible clean_run /usr/bin/env HOMEBREW_BUNDLE_CASK_SKIP="$skip_casks" \
         "$brew_bin" bundle install --file="$scratch/Brewfile" --no-upgrade
     ) || die 'Package installation stopped. Existing app conflicts are preserved; do not force adoption.'
   fi
@@ -347,7 +398,7 @@ if [[ "$wallpaper" == true ]]; then
 fi
 preference_failed() {
   preference_failures+=("$1 $2: $3")
-  printf '  ! Warning: preference not applied: %s %s\n    %s. Continuing setup.\n' "$1" "$2" "$3" >&2
+  printf '  ! Warning: preference not applied: %s %s\n             %s. Continuing setup.\n' "$1" "$2" "$3" | format_output >&2
   if [[ "$1" == com.apple.TextEdit ]]; then
     note "TextEdit permission: allow the app running setup (Terminal, iTerm, or your editor) to access other apps' data / Full Disk Access in System Settings > Privacy & Security, then quit and reopen it."
     note 'Or set TextEdit > Settings > New Document > Plain text manually. If access is already allowed, review the write or verification error above.'
@@ -436,7 +487,7 @@ show_library() {
   fi
   [[ ",$flags," == *,hidden,* ]] || return 0
   if [[ "$check" == true ]]; then pending 'Show the Library folder'; return; fi
-  if /bin/chflags nohidden "$HOME/Library" \
+  if run_visible /usr/bin/chflags nohidden "$HOME/Library" \
       && flags="$(/usr/bin/stat -f %Sf "$HOME/Library")" && [[ ",$flags," != *,hidden,* ]]; then
     ready 'Library folder is visible'
   else
@@ -525,7 +576,7 @@ messages_preferences() {
   done
 }
 restart_freeze_setting() {
-  local current
+  local current diagnostic status=0
   current="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -getrestartfreeze 2>/dev/null || true)"
   [[ "$current" != 'Restart After Freeze: On' ]] || return 0
   if [[ "$check" == true ]]; then
@@ -533,11 +584,19 @@ restart_freeze_setting() {
     return
   fi
   note 'Enable restart after freeze · administrator approval may be required'
-  if clean_run /usr/bin/sudo /usr/sbin/systemsetup -setrestartfreeze on; then
-    current="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -getrestartfreeze 2>/dev/null || true)"
+  # Keep the password prompt on the terminal before capturing native diagnostics.
+  if ! clean_run /usr/bin/sudo -v -p '  Mac login password (authorizes restart setting): '; then
+    preference_failed systemsetup restartfreeze 'administrator authorization was not completed'
+    return
   fi
-  [[ "$current" == 'Restart After Freeze: On' ]] \
-    || preference_failed systemsetup restartfreeze 'restart after freeze could not be enabled or verified'
+  diagnostic="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -setrestartfreeze on 2>&1)" || status=$?
+  current="$(clean_run /usr/bin/sudo -n /usr/sbin/systemsetup -getrestartfreeze 2>/dev/null || true)"
+  if [[ "$status" == 0 && "$current" == 'Restart After Freeze: On' ]]; then
+    ready 'Restart after freeze is enabled'
+  else
+    [[ -z "$diagnostic" ]] || printf '%s\n' "$diagnostic" | format_output >&2
+    preference_failed systemsetup restartfreeze 'restart after freeze could not be enabled or verified'
+  fi
 }
 # Only these two fixed shortcuts are managed; dict-add preserves other hotkeys.
 hotkey_matches() {
@@ -679,7 +738,7 @@ if [[ ! -d "$ohmyzsh_dir" ]]; then
     pending 'Oh My Zsh is not installed.'
   else
     [[ -n "$scratch" ]] || scratch="$(/usr/bin/mktemp -d /private/tmp/macsetup-base.XXXXXX)"
-    clean_run /usr/bin/git clone --depth 1 --branch master -- \
+    run_visible clean_run /usr/bin/git clone --depth 1 --branch master -- \
       https://github.com/ohmyzsh/ohmyzsh.git "$scratch/oh-my-zsh" \
       || die 'Oh My Zsh download failed; rerun Base.'
     [[ -f "$scratch/oh-my-zsh/oh-my-zsh.sh" && ! -L "$scratch/oh-my-zsh/oh-my-zsh.sh" ]] \
@@ -750,7 +809,7 @@ for name in ${dotfiles+"${dotfiles[@]}"}; do
   fi
 done
 if [[ "$migrate_ohmyzsh" == true && "$local_dots" == false ]]; then
-  if ! clean_run /bin/bash -p "$base_dir/migrate-ohmyzsh.sh" "$check"; then
+  if ! run_visible clean_run /bin/bash -p "$base_dir/migrate-ohmyzsh.sh" "$check"; then
     pending 'Oh My Zsh startup migration requires attention.'
     unresolved+=('Oh My Zsh startup was not verified; review the migration message above.')
   fi
@@ -787,7 +846,7 @@ if [[ ${#mas_ids[@]} -gt 0 ]]; then
   if [[ "$check" == false && "$mas_pending" == true && "$mas_ready" == true ]]; then
     note 'Apple may request your Apple Account password or Touch ID for downloads.'
     printf '%s\n' "${mas_declarations[@]}" > "$scratch/AppStore.Brewfile"
-    if (cd -- "$scratch" && clean_run "$brew_bin" bundle install --file="$scratch/AppStore.Brewfile" --no-upgrade); then
+    if (cd -- "$scratch" && run_visible clean_run "$brew_bin" bundle install --file="$scratch/AppStore.Brewfile" --no-upgrade); then
       if ! installed_mas="$(clean_run "$mas_bin" list)"; then
         unresolved+=('App Store inventory could not be verified after installation.')
       else
@@ -819,17 +878,17 @@ else
   if [[ ${#preference_failures[@]} -gt 0 || ${#unresolved[@]} -gt 0 ]]; then
     printf '  ! Base needs attention\n'
     if [[ ${#preference_failures[@]} -gt 0 ]]; then
-      printf '    - %s\n' "${preference_failures[@]}"
+      printf '    - %s\n' "${preference_failures[@]}" | format_output
       note 'Resolve the preference errors above, then rerun as the same user.'
     fi
-    [[ ${#unresolved[@]} == 0 ]] || printf '    - %s\n' "${unresolved[@]}"
-    [[ ${#deferred[@]} == 0 ]] || printf '  · Deferred by request: %s\n' "${deferred[@]}"
+    [[ ${#unresolved[@]} == 0 ]] || printf '    - %s\n' "${unresolved[@]}" | format_output
+    [[ ${#deferred[@]} == 0 ]] || printf '  · Deferred by request: %s\n' "${deferred[@]}" | format_output
     note 'Rerun Base after resolving these items; --check lists pending changes.'
     exit 3
   fi
   ready 'Base setup complete'
   if [[ ${#deferred[@]} -gt 0 ]]; then
-    printf '  · Deferred by request: %s\n' "${deferred[@]}"
+    printf '  · Deferred by request: %s\n' "${deferred[@]}" | format_output
     note 'Rerun Base when ready.'
   fi
   note 'Open a new shell. Some settings need an app restart or logout.'

@@ -99,6 +99,16 @@ class MacOSPreferencesTests(unittest.TestCase):
         })
         self.run_base(*args, "--check")
 
+    def test_library_failure_remains_visible_and_does_not_stop_shell_setup(self):
+        (self.home / "Library").mkdir()
+        self.seed(library_hidden=True, chflags_failure=True)
+        output = self.run_base(*self.selection(prefs="finder=true\n"), code=3)
+        self.assertIn("    chflags: permission denied", output)
+        self.assertIn("could not make Library visible", output)
+        self.assertIn("Base needs attention", output)
+        self.assertTrue(json.loads(self.state.read_text())["library_hidden"])
+        self.assertTrue((self.home / ".zshrc").exists())
+
     def test_pinyin_preserves_input_sources_and_handles_byhost(self):
         other = '{ InputSourceKind = "Keyboard Layout"; "KeyboardLayout Name" = "Custom"; }'
         self.seed(input_sources={"AppleEnabledInputSources": [other], "AppleSelectedInputSources": [other]})
@@ -166,6 +176,28 @@ class MacOSPreferencesTests(unittest.TestCase):
             self.run_base(*args)
             self.run_base(*args, "--check")
         self.assertFalse(any(c[0] in ("defaults", "sudo", "PlistBuddy", "chflags") for c in self.calls()))
+
+    def test_restart_diagnostic_is_quiet_only_after_verified_success(self):
+        args = self.selection(prefs="restart_on_freeze=true\n")
+        diagnostic = "systemsetup: Error:-99 File:/AppleInternal/fixture.m Line:395"
+        self.seed(systemsetup_diagnostic=diagnostic, systemsetup_no_change=True)
+        output = self.run_base(*args, code=3)
+        self.assertIn("    " + diagnostic, output)
+        self.assertIn("Base needs attention", output)
+        self.assertNotIn("Restart after freeze is enabled", output)
+        self.seed(systemsetup_no_change=False)
+        output = self.run_base(*args)
+        self.assertIn("Restart after freeze is enabled", output)
+        self.assertNotIn("Error:-99", output)
+        calls = [c[1] for c in self.calls() if c[0] == "sudo"]
+        setter = calls.index(["-n", "/usr/sbin/systemsetup", "-setrestartfreeze", "on"])
+        self.assertEqual(calls[setter - 1][:2], ["-v", "-p"])
+
+    def test_restart_authorization_failure_never_runs_setter(self):
+        self.seed(sudo_denied=True)
+        output = self.run_base(*self.selection(prefs="restart_on_freeze=true\n"), code=3)
+        self.assertIn("administrator authorization was not completed", output)
+        self.assertFalse(any("-setrestartfreeze" in c[1] for c in self.calls()))
 
     def test_unsafe_nested_preference_destinations_fail_before_mutation(self):
         prefs = self.home / "Library/Preferences"
